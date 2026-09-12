@@ -1476,3 +1476,115 @@ h1 span {
     scroll-behavior: auto !important;
   }
 }
+
+/* Keep the question and pitch in one desktop workspace, including laptop displays.
+   Both the SVG and pieces use the same normalized surface; the center ring stays circular. */
+.pitch-center-circle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  height: 26.8%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: 1px solid #688365;
+  border-radius: 50%;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.analysis-result .principle {
+  margin-bottom: 18px;
+  color: #8d9c80;
+}
+@media (min-width: 851px) {
+  .topbar {
+    height: 64px;
+  }
+  main {
+    padding-top: 22px;
+  }
+  .intro {
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: 38px;
+    margin: 10px 0 8px;
+  }
+  .workspace {
+    height: calc(100dvh - 238px);
+    min-height: 620px;
+    max-height: 960px;
+  }
+  .board-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .scenario-tabs {
+    flex-shrink: 0;
+    margin-bottom: 12px;
+  }
+  .board-card {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .match-header {
+    height: 50px;
+    min-height: 50px;
+  }
+  .pitch-meta {
+    flex-shrink: 0;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+  .pitch {
+    flex: 1;
+    min-height: 240px;
+    aspect-ratio: auto;
+  }
+  .pitch-bottom {
+    flex-shrink: 0;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .board-status {
+    min-height: 62px;
+    flex-shrink: 0;
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  .question-box {
+    flex-shrink: 0;
+    margin-top: 12px;
+    padding-top: 13px;
+    padding-bottom: 12px;
+  }
+  .question-box label {
+    margin-bottom: 7px;
+  }
+  .example-questions {
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+  .analysis-panel {
+    height: 100%;
+  }
+  .empty-analysis {
+    min-height: 0;
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+  .analysis-result {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #46563a transparent;
+  }
+  .panel-footer {
+    flex-shrink: 0;
+  }
+  .app-footer {
+    padding: 12px 0;
+  }
+}

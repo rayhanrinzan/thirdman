@@ -92,7 +92,6 @@ test("rejects invalid IDs, opponents, malformed coordinates and incomplete or ov
 test("rejects duplicate or reassigned players and empty questions", () => {
   const input = {
     scenario: "press",
-    question: "How do we beat this press?",
     ...scenarios.press,
     players: initialPlayers("press"),
   };

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import {
@@ -159,14 +160,14 @@ export default function Sandbox() {
     <MotionConfig reducedMotion="user">
       <div className="app-shell">
         <header className="topbar">
-          <a className="brand" href="/" aria-label="Thirdman home">
+          <Link className="brand" href="/" aria-label="Thirdman home">
             <span className="brand-symbol">
               <i />
               <i />
               <i />
             </span>
             THIRDMAN<span className="brand-period">.</span>
-          </a>
+          </Link>
           <span className="nav-subtitle">AI FOOTBALL TACTICS SANDBOX</span>
           <nav aria-label="Main navigation">
             <button
@@ -531,6 +532,14 @@ export default function Sandbox() {
           ref={dialog}
           className="how-dialog"
           aria-labelledby="how-title"
+          onKeyDown={(event) => {
+            if (event.key === "Tab") {
+              event.preventDefault();
+              dialog.current
+                ?.querySelector<HTMLButtonElement>(".dialog-close")
+                ?.focus();
+            }
+          }}
           onClick={(e) => {
             if (e.target === dialog.current) closeHelp();
           }}

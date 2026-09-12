@@ -51,9 +51,11 @@ export default function Pitch({
         ref={surface}
         aria-label="Football tactics board. Tottenham attacks from left to right."
       >
+        <div className="pitch-center-circle" aria-hidden="true" />
         <svg
           className="pitch-lines"
           viewBox="0 0 1000 620"
+          preserveAspectRatio="none"
           fill="none"
           aria-hidden="true"
         >
@@ -87,7 +89,6 @@ export default function Pitch({
           <g stroke="currentColor" strokeWidth="1.5">
             <rect x="22" y="22" width="956" height="576" rx="1" />
             <path d="M500 22V598" />
-            <circle cx="500" cy="310" r="83" />
             <path d="M22 160H166V460H22 M978 160H834V460H978 M22 242H74V378H22 M978 242H926V378H978" />
             <path d="M166 243Q227 310 166 377 M834 243Q773 310 834 377" />
             <path d="M22 276H8V344H22 M978 276H992V344H978" opacity=".8" />
