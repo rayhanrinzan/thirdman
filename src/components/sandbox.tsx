@@ -74,7 +74,8 @@ export default function Sandbox() {
     version = useRef(0),
     gesture = useRef<Board | null>(null);
   const dialog = useRef<HTMLDialogElement>(null),
-    help = useRef<HTMLButtonElement>(null);
+    help = useRef<HTMLButtonElement>(null),
+    workspace = useRef<HTMLElement>(null);
   const reduced = useReducedMotion();
   const actions = session
     ? phase === "response"
@@ -105,6 +106,13 @@ export default function Sandbox() {
     !!session && phase !== "original" && timeline.time >= duration;
   const hasInspector = !!session || !!selection;
   useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => {
+    if (!session || !window.matchMedia("(max-width: 760px)").matches) return;
+    const frame = requestAnimationFrame(() =>
+      workspace.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [session]);
   function clearPreview() {
     version.current++;
     request.current?.abort();
@@ -341,6 +349,7 @@ export default function Sandbox() {
             <button
               className="quiet-button reset-button"
               onClick={() => reset()}
+              aria-label="Reset"
               title="Restore this scenario"
             >
               <RotateCcw size={16} />
@@ -438,7 +447,11 @@ export default function Sandbox() {
             </div>
           </div>
           <div className={`stage ${hasInspector ? "with-inspector" : ""}`}>
-            <section className="board-area" aria-label="Tactical workspace">
+            <section
+              ref={workspace}
+              className="board-area"
+              aria-label="Tactical workspace"
+            >
               {session && (
                 <div
                   className="comparison"

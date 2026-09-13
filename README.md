@@ -1,28 +1,36 @@
 # THIRDMAN
 
-**AI football tactics sandbox. See the game differently.**
+**AI football tactics sandbox.** Set up a shape, explore an idea, play the sequence, inspect a possible response, and compare the consequences.
 
-Move players, change the shape, and ask AI how the game changes. Thirdman turns a tactical question into one concrete, visible adjustment on a Tottenham–Arsenal board.
+## The one-minute demo
 
-## The 30-second demo
+1. Open **Beat the press**. Tottenham has the ball with the goalkeeper.
+2. Click **Explore** with “How can we create a free player?” The original board stays intact; ghosts preview the movement.
+3. Click **Play sequence**. The DM drops between the center backs and the ball circulates GK → LCB → DM → RCB. Pause, scrub, replay, or use the step controls.
+4. Click **Apply final shape**, then **Explore Arsenal’s response**. One possible midfielder jump leaves highlighted space and a possible next passing route.
+5. Use **Original / Tottenham adjustment / Arsenal response** to compare stages. Apply the response separately, then return to editing. Undo reverses the response and Tottenham adjustment in separate steps.
+6. Try **Invert fullback**, **Overlap**, or **Double pivot**, or switch scenarios. **Reset** restores the complete current scenario and cancels requests and playback.
 
-1. Open the app. Tottenham builds out against Arsenal's two-forward press.
-2. Drag a white player, or focus one and use arrow keys (Shift for larger steps).
-3. Select **How do we beat this press?** and press Enter or **ANALYZE SHAPE**.
-4. Read the diagnosis and click **APPLY ADJUSTMENT →**.
-5. Watch the DM drop between the center backs: **2v2 first line → 3v2 overload**.
-6. Select **ASK OPPOSITION AI** to see Arsenal's possible response.
-7. **RESET** restores the original board and clears every analysis state.
+The whole demo works without an API key. Live analysis may choose a different valid sequence based on the actual board and question.
 
-The full demonstration works without an API key.
+## Working with the board
 
-## Scenarios
+- Select **Tottenham** or **Arsenal** to edit that team. Drag a piece, or focus it and use arrow keys; Shift moves farther. Select a player to assign possession or inspect nearby pressure.
+- Both teams offer **4–3–3, 4–2–3–1, 3–2–5, and 4–4–2**. Stable identities survive formation changes; displayed roles update. Manual movements are labeled **Edited shape**.
+- Undo/redo includes player movement, possession, formations, applied sequences and opposition responses. A drag is one history entry; up to 40 entries are kept in memory.
+- One optional overlay is visible at a time: nearby passing options, team shape, or pressure around the selected player. Passing lanes use geometric proximity, not success probabilities. The pressure ring shows nearby opponents, not a simulated press.
+- Preview and playback are separate from the editable board. **Cancel preview** discards an unapplied preview. After applying, **Return to editing** preserves the applied board; undo restores earlier states.
+- Reduced-motion mode offers a step-based sequence. On phones, contextual information stacks beneath the pitch and new sequences bring the board into view.
 
-- **Beat the press:** drop the DM between the center backs to create a spare player in buildup.
-- **Break a low block:** bring the left winger into a half-space to create a local overload.
-- **Protect a lead:** drop the right central midfielder alongside the DM to create a double pivot.
+## Three distinct scenarios
 
-These are illustrative tactical scenarios using positional roles, not reconstructions of real matches. No club crests, player images, scraped statistics, or external football datasets are used.
+| Scenario | Idea | Tradeoff |
+| --- | --- | --- |
+| Beat the press | Drop a holding midfielder into the first line and circulate through the spare player. | Less midfield presence until the next pass. |
+| Break a low block | Move the winger into a half-space, combine inside, and find the outside lane. | The supporting fullback leaves space behind. |
+| Protect a lead | Form a double pivot and recycle through the center backs. | Reduced forward support. |
+
+These are illustrative shapes using positional roles, not reconstructions of real matches. The response is a possibility, not a prediction. No external datasets, real player attributes, invented xG, probabilities, or tactical ratings are used.
 
 ## Run locally
 
@@ -34,49 +42,44 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open [localhost:3000](http://localhost:3000). Both environment variables may remain empty.
+Open [localhost:3000](http://localhost:3000). Both environment variables may remain empty:
 
 ```text
 OPENAI_API_KEY=
 OPENAI_MODEL=
 ```
 
-For live analysis, add your OpenAI API key to `.env.local` or your host's secure server environment. Never use a `NEXT_PUBLIC_` key. Restart the dev server after changing the environment. Model selection is centralized in `src/lib/openai.ts`; `OPENAI_MODEL` overrides the default `gpt-5.4-mini`, which supports Responses and Structured Outputs. Use a model available to your API project that supports these features.
+For live analysis, add an API key to `.env.local` or your host’s secure server environment. Never use a `NEXT_PUBLIC_` key. Restart after changing environment variables. `OPENAI_MODEL` overrides the central default `gpt-5.4-mini`; the selected model must be available to your project and support Responses Structured Outputs.
 
 ## Architecture
 
-- **Next.js App Router + TypeScript:** one page and one Node server route, `/api/analyze`.
-- **React state:** normalized board coordinates, scenario, question, analysis and applied state; no database or global state library.
-- **Tailwind CSS + authored CSS:** responsive dark workspace, locally drawn SVG pitch and team pieces.
-- **Motion + Pointer Events:** animated scenario/adjustment transitions, captured-pointer dragging, keyboard alternatives and reduced-motion support.
-- **Lucide:** restrained interface icons.
-- **OpenAI official SDK + Zod:** typed, validated analysis, with deterministic recovery.
+- **Next.js App Router + TypeScript:** one page and one Node route, `/api/analyze`.
+- **`src/lib/lab.ts`:** board types, Zod schemas, action validation, formation layouts, history reducer, geometry, and pure deterministic timeline sampling.
+- **`src/lib/curated.ts`:** bounded intent matching and distinct no-key sequences, calculated from current coordinates and possession.
+- **`src/components/sandbox.tsx`:** separate editable history, preview snapshot, comparison stage, and applied state. No database or global state library.
+- **`src/components/use-timeline.ts`:** playback clock, pause, seek and background-tab pause. The same timestamp always produces the same positions, including a ball paused mid-pass.
+- **`src/components/pitch.tsx`:** SVG pitch and overlays, Motion transitions, pointer capture and keyboard editing.
+- **`src/lib/openai.ts`:** server-only official OpenAI SDK, Responses API and `zodTextFormat`.
 
-### Coordinates
+### Coordinates and sequence data
 
-The landscape pitch uses percentages: **x increases left → right; y increases top → bottom. Tottenham always attacks toward increasing x.** All movement stays within 4–96 on both axes. Pixel measurements are used only to convert a pointer position into normalized coordinates. Every player has a stable ID. The DM is `dm`; Arsenal IDs have an `ars-` prefix.
+Positions are normalized: **x increases left → right; y increases top → bottom. Tottenham attacks toward increasing x.** Coordinates stay within 4–96. Pixel measurements only convert pointer positions. Player IDs stay stable even when their formation role changes; Arsenal IDs start with `ars-`.
 
-In the press preset, the center backs are `(25, 33)` and `(25, 67)`. The DM moves from `(43, 50)` to their midpoint `(25, 50)`. The fallback recomputes that midpoint from the current center backs. The double-pivot target follows the current DM.
+Each sequence has concise analysis text, timed `move`, `pass`, and `highlight` actions, and a separate opponent response. Validation checks roster identity, team ownership, finite coordinates, coherent possession transfers, meaningful changes, bounded text, at most three Tottenham moves and four passes, and at most 18 seconds of main playback. The opponent stage contains one or two Arsenal moves. Finite model coordinates are clamped to the safe pitch boundary; malformed values are rejected.
 
-### AI integration
+In the default press example, center backs are `(25, 33)` and `(25, 67)`. The DM drops from `(43, 50)` to their current midpoint `(25, 50)`. A possible Arsenal midfielder jump leaves its former midfield space visible. Heavily edited shapes receive conservative labels rather than an assumed numerical overload.
 
-The browser sends the question, scenario, both formations and all 22 players (IDs, roles, teams and positions). The route validates the request, including roster identity, uniqueness, coordinates and body size, before calling the API.
+### AI and deterministic recovery
 
-`src/lib/openai.ts` uses the installed SDK's `client.responses.parse()` and `zodTextFormat()` to send a strict JSON schema through `text.format`. Responses are not stored (`store: false`). The prompt confines analysis to the board, favors one player movement, and excludes invented statistics, attributes or match events.
+The browser sends the actual question, scenario, all 22 players, roles, formations, edited-shape flags, and ball owner. The route validates the roster and a 24 KB body limit. The server sends a strict Structured Outputs schema using `client.responses.parse()` with `store: false`, then validates the result semantically. The model never generates code to run.
 
-The returned object is validated again with Zod. Unknown IDs, opponent movements, non-finite coordinates, incomplete fields and excessive text are rejected. Valid numeric coordinates are clamped. Only validated results reach the UI. API credentials and SDK errors are never logged or returned.
+Without a key, or after provider failure, refusal, timeout, incomplete output or invalid actions, the app uses a curated exploration. Free-player buildup, fullback inversion, overlap, half-space and double-pivot questions produce distinct responses. Unsupported questions receive an honest explanation and supported shortcuts. Arsenal possession produces shape-only Tottenham actions instead of inventing a possession change. Small **Live board analysis** or **Curated exploration** attribution identifies the source.
 
-Official references: [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) and [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini).
+The server timeout is 18 seconds with retries disabled; the browser has a separate 22-second deadline and local recovery. Reset, scenario changes, edits and new requests invalidate stale results. Opponent actions are included in the original analysis, so exploring the response needs no extra API call. Credentials, provider errors and question contents are not logged.
 
-### Reliability and limitations
+References: [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs) and [GPT-5.4 mini](https://developers.openai.com/api/docs/models/gpt-5.4-mini).
 
-If no key is present, or the SDK fails, times out, exhausts quota, refuses, or returns invalid output, `src/lib/fallback.ts` produces a curated scenario recommendation with the identical `Analysis` type. These are deterministic structural suggestions, not free-form answers to arbitrary tactical questions. A small **Scenario guide** attribution distinguishes these from live board analysis. Fallback labels describe the intended preset relationship; extensively edited boards should be reset to reproduce the canonical demonstration.
-
-The server timeout is 18 seconds with SDK retries disabled. The browser has a separate 22-second deadline and a local fallback if the route cannot be reached. Reset, scenario changes and player moves abort pending requests and invalidate stale results. Applying a move is idempotent. The opponent response is included in the same analysis; it requires no second API call.
-
-The public endpoint is intentionally simple. No authentication, durable rate limiter or database is included. For a public demo with a paid API key, set project usage limits in OpenAI and consider Vercel's platform rate controls for expected traffic. Without a key, hosting the full demo makes no paid API calls.
-
-## Checks
+## Validation
 
 ```sh
 npm run lint
@@ -87,22 +90,10 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-The Playwright suite starts the production build with `OPENAI_API_KEY` empty. It checks the full flow at desktop and phone widths, pointer and keyboard movement, all scenarios, reset, opposition response, modal focus and Escape, stale requests, client network recovery, API validation and browser errors. Run it after `npm run build`. Stop any existing server using a key first so the suite can test the no-key path.
+Run browser tests after building. The suite starts the production server with an empty API key; stop any existing key-enabled server first. Engine and server tests cover all curated combinations, immutable interpolation, history, identities, invalid action rejection, and real SDK requests against mocked provider responses. Browser tests exercise desktop and phone widths, both teams, possession, formations, overlays, complete playback and response flows, comparison, undo/redo, request cancellation, network recovery, keyboard access, reduced motion, modal focus and browser errors.
 
-```sh
-npm run start
-```
+## Deployment
 
-## Vercel deployment
+The existing [rayhanrinzan/thirdman](https://github.com/rayhanrinzan/thirdman) repository is connected to Vercel. Pushes to `main` trigger its production deployment. Use the **Next.js** preset, repository root, default output directory, `npm ci`, and `npm run build`.
 
-Import the existing [rayhanrinzan/thirdman](https://github.com/rayhanrinzan/thirdman) repository in Vercel. Use the Next.js preset, repository root, `npm ci`, and `npm run build`. No custom Vercel configuration is required.
-
-For live AI, set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` through Vercel's secure environment settings for the intended environments, then redeploy. Leave them unset for the complete deterministic demo. Never commit `.env.local` or `.vercel` credentials.
-
-For an authenticated CLI deployment:
-
-```sh
-npx vercel --prod
-```
-
-Built as an exploration of generative AI + football tactics.
+For live AI, set `OPENAI_API_KEY` and optionally `OPENAI_MODEL` in Vercel’s secure environment settings, then redeploy. Leave them unset for the deterministic demo. No accounts, database, payments, or additional infrastructure are required. The API has no durable rate limiter; a paid public deployment can use host-level traffic controls and API project limits.
