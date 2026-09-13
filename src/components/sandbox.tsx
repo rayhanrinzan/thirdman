@@ -32,6 +32,7 @@ import {
   formationNames,
   historyReducer,
   movePlayer,
+  passLane,
   sampleSequence,
   totalDuration,
   validateSequence,
@@ -109,7 +110,10 @@ export default function Sandbox() {
   useEffect(() => {
     if (!session || !window.matchMedia("(max-width: 760px)").matches) return;
     const frame = requestAnimationFrame(() =>
-      workspace.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+      workspace.current?.scrollIntoView({
+        block: "start",
+        behavior: "instant",
+      }),
     );
     return () => cancelAnimationFrame(frame);
   }, [session]);
@@ -713,7 +717,13 @@ export default function Sandbox() {
                           <span className="space-dot" />
                           {session.analysis.opponent.space.label}
                           <small>
-                            Dashed route: a possible next connection
+                            {passLane(
+                              displayed,
+                              displayed.possession,
+                              session.analysis.opponent.outletPlayerId,
+                            ).blocked
+                              ? "Direct outlet unavailable. Reposition or recycle to reach this space."
+                              : "Dashed route: an open lane to a possible next connection"}
                           </small>
                         </div>
                       )}

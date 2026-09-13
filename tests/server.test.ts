@@ -118,3 +118,22 @@ for (const failure of [
     }
   });
 }
+
+test("a live sequence with an obstructed pass is rejected and recovered with open curated lanes", async () => {
+  process.env.OPENAI_API_KEY = "test-placeholder-not-a-real-key";
+  const unsafeBoard = {
+    ...input.board,
+    players: input.board.players.map((p) =>
+      p.id === "ars-st" ? { ...p, x: 16.5, y: 41.5 } : p,
+    ),
+  };
+  globalThis.fetch = async () => mockResponse(fixture);
+  try {
+    const result = await analyzeBoard({ ...input, board: unsafeBoard });
+    assert.equal(result.source, "fallback");
+    assert.ok(result.analysis);
+    assert.notDeepEqual(result.analysis.actions, fixture.actions);
+  } finally {
+    restore();
+  }
+});

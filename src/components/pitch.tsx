@@ -5,6 +5,7 @@ import {
   convexHull,
   distance,
   passingOptions,
+  passLane,
   type Board,
   type Team,
   type MoveAction,
@@ -140,6 +141,8 @@ export default function Pitch({
         {options.map(({ player, blocked }) => (
           <path
             key={player.id}
+            data-passing-to={player.id}
+            data-blocked={blocked}
             d={`M${owner.x * 10} ${owner.y * 6.2}L${player.x * 10} ${player.y * 6.2}`}
             stroke={blocked ? "#e6a478" : "#c3ee85"}
             strokeWidth="2.5"
@@ -218,12 +221,18 @@ export default function Pitch({
               strokeDasharray="4 5"
             />
             {(() => {
+              if (
+                passLane(board, board.possession, response.outletPlayerId)
+                  .blocked
+              )
+                return null;
               const to = board.players.find(
                 (p) => p.id === response.outletPlayerId,
               )!;
               return (
                 <path
-                  d={`M${ball.x * 10} ${ball.y * 6.2}Q${response.space.x * 10} ${response.space.y * 6.2} ${to.x * 10} ${to.y * 6.2}`}
+                  data-response-route="open"
+                  d={`M${ball.x * 10} ${ball.y * 6.2}L${to.x * 10} ${to.y * 6.2}`}
                   stroke="#c3ee85"
                   strokeWidth="2.5"
                   strokeDasharray="5 7"

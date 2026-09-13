@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { createBoard } from "../../src/lib/lab";
+import {
+  createBoard,
+  applyAction,
+  passLane,
+  type Board,
+  type AnalysisResult,
+} from "../../src/lib/lab";
 import { scenarios } from "../../src/lib/tactics";
 const dm = (page: import("@playwright/test").Page) =>
   page.locator('[data-player-id="dm"]');
@@ -111,6 +117,8 @@ test("pause freezes a ball mid-pass; stepping, scrubbing, and replay are reversi
   const x = await page.locator(".ball").getAttribute("data-x");
   await page.waitForTimeout(300);
   await expect(page.locator(".ball")).toHaveAttribute("data-x", x!);
+  // Anchor step assertions to a known time; browser clicks can span another pass under load.
+  await slider.fill("1600");
   await page
     .getByRole("button", { name: "Previous step", exact: true })
     .click();
@@ -317,4 +325,75 @@ test("API validates rosters, possession and request size; all no-key scenarios w
   expect(
     (await request.post("/api/analyze", { data: "x".repeat(25000) })).status(),
   ).toBe(413);
+});
+
+test("an opponent in an amber passing lane makes the sequence route around it", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Arsenal", exact: true }).click();
+  const opponent = page.locator('[data-player-id="ars-st"]');
+  const piece = await opponent.boundingBox(),
+    pitch = await page.locator(".pitch").boundingBox();
+  if (!piece || !pitch) throw new Error("Missing board");
+  await page.mouse.move(piece.x + piece.width / 2, piece.y + piece.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    pitch.x + pitch.width * 0.165,
+    pitch.y + pitch.height * 0.415,
+    { steps: 8 },
+  );
+  await page.mouse.up();
+  await page
+    .getByRole("combobox", { name: "Tactical overlay", exact: true })
+    .selectOption("passing");
+  await expect(page.locator('[data-passing-to="lcb"]')).toHaveAttribute(
+    "data-blocked",
+    "true",
+  );
+  const pending = page.waitForResponse((r) => r.url().endsWith("/api/analyze"));
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const response = await pending;
+  let board: Board = response.request().postDataJSON().board;
+  const result: AnalysisResult = await response.json();
+  expect(result.analysis).toBeTruthy();
+  let passes = 0;
+  for (const action of result.analysis!.actions) {
+    if (action.type === "pass") {
+      expect(passLane(board, action.fromId, action.toId).blocked).toBe(false);
+      expect(action.fromId === "gk" && action.toId === "lcb").toBe(false);
+      passes++;
+    }
+    board = applyAction(board, action);
+  }
+  expect(passes).toBeGreaterThan(0);
+  await expect(page.locator(".inline-notice")).toContainText("blocked");
+  await page
+    .getByRole("button", { name: "Apply final shape", exact: true })
+    .click();
+  await expect(page.locator(".ball")).toHaveAttribute(
+    "data-possession",
+    board.possession,
+  );
+  await page
+    .getByRole("button", { name: "Explore Arsenal’s response", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Apply response", exact: true })
+    .click();
+  for (const action of result.analysis!.opponent.movements)
+    board = applyAction(board, action);
+  const blocked = passLane(
+    board,
+    board.possession,
+    result.analysis!.opponent.outletPlayerId,
+  ).blocked;
+  await expect(page.locator("[data-response-route]")).toHaveCount(
+    blocked ? 0 : 1,
+  );
+  if (blocked)
+    await expect(page.locator(".space-note")).toContainText(
+      "Direct outlet unavailable",
+    );
 });

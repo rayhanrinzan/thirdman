@@ -347,6 +347,8 @@ export function validateSequence(value: unknown, board: Board): Sequence {
         to = current.players.find((p) => p.id === toId)!;
       if (Math.hypot(from.x - to.x, from.y - to.y) < 1)
         throw new Error("Pass has no meaningful distance");
+      if (passLane(current, fromId, toId).blocked)
+        throw new Error("Pass crosses a blocked lane");
       meaningful = true;
     } else action.playerIds.forEach(player);
     current = applyAction(current, action);
@@ -497,6 +499,7 @@ export function historyReducer(state: History, action: HistoryAction): History {
   };
 }
 /** Metric uses nominal pitch proportions (length 100, width 62). It is an illustrative geometry heuristic. */
+export const PASS_LANE_CLEARANCE = 4;
 export function distance(a: Position, b: Position) {
   return Math.hypot(a.x - b.x, (a.y - b.y) * 0.62);
 }
@@ -512,6 +515,60 @@ export function laneDistance(p: Position, a: Position, b: Position) {
     : 0;
   return distance(p, { x: a.x + t * dx, y: a.y + t * (b.y - a.y) });
 }
+/** Shared by overlays, sequence validation and routing. Includes pressure at both endpoints. */
+export function passLane(board: Board, fromId: string, toId: string) {
+  const from = board.players.find((p) => p.id === fromId),
+    to = board.players.find((p) => p.id === toId);
+  if (
+    !from ||
+    !to ||
+    from.id === to.id ||
+    from.team !== to.team ||
+    distance(from, to) < 1
+  )
+    return { blocked: true, blockerIds: [] as string[] };
+  const blockerIds = board.players
+    .filter(
+      (p) =>
+        p.team !== from.team && laneDistance(p, from, to) < PASS_LANE_CLEARANCE,
+    )
+    .map((p) => p.id);
+  return { blocked: blockerIds.length > 0, blockerIds };
+}
+
+/** Fewest-pass open route to an intended receiver, bounded by the remaining action budget. */
+export function findPassingRoute(
+  board: Board,
+  toId: string,
+  maxPasses: number,
+): string[] | null {
+  const owner = board.players.find((p) => p.id === board.possession),
+    target = board.players.find((p) => p.id === toId);
+  if (!owner || !target || owner.team !== target.team) return null;
+  if (owner.id === toId) return [];
+  const teammates = board.players
+    .filter((p) => p.team === owner.team)
+    .sort((a, b) => distance(a, target) - distance(b, target));
+  const queue: string[][] = [[owner.id]],
+    visited = new Set([owner.id]);
+  for (let i = 0; i < queue.length; i++) {
+    const path = queue[i];
+    if (path.length > Math.min(4, maxPasses)) continue;
+    for (const next of teammates) {
+      if (
+        visited.has(next.id) ||
+        passLane(board, path.at(-1)!, next.id).blocked
+      )
+        continue;
+      const route = [...path, next.id];
+      if (next.id === toId) return route.slice(1);
+      visited.add(next.id);
+      queue.push(route);
+    }
+  }
+  return null;
+}
+
 export function passingOptions(board: Board) {
   const owner = board.players.find((p) => p.id === board.possession)!;
   return board.players
@@ -520,9 +577,7 @@ export function passingOptions(board: Board) {
     .slice(0, 4)
     .map((p) => ({
       player: p,
-      blocked: board.players.some(
-        (q) => q.team !== owner.team && laneDistance(q, owner, p) < 4,
-      ),
+      blocked: passLane(board, owner.id, p.id).blocked,
     }));
 }
 export function convexHull(players: Player[]): Position[] {

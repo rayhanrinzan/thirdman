@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { zodTextFormat } from "openai/helpers/zod";
 import {
   applyActions,
+  applyAction,
   changeFormation,
   createBoard,
   formationNames,
@@ -11,6 +12,9 @@ import {
   laneDistance,
   movePlayer,
   passingOptions,
+  passLane,
+  findPassingRoute,
+  PASS_LANE_CLEARANCE,
   sampleSequence,
   sequenceSchema,
   totalDuration,
@@ -26,7 +30,17 @@ for (const scenario of ["press", "block", "lead"] as const) {
       assert.ok(result.analysis);
       const seq = validateSequence(result.analysis, board);
       assert.ok(seq.actions.some((a) => a.type === "move"));
-      assert.ok(seq.actions.filter((a) => a.type === "pass").length >= 2);
+      const passes = seq.actions.filter((a) => a.type === "pass");
+      assert.ok(passes.length >= 2 || result.notice?.includes("no open route"));
+      let current = board;
+      for (const action of seq.actions) {
+        if (action.type === "pass")
+          assert.equal(
+            passLane(current, action.fromId, action.toId).blocked,
+            false,
+          );
+        current = applyAction(current, action);
+      }
       assert.ok(totalDuration(seq.actions) < 18000);
       const final = applyActions(board, seq.actions);
       assert.notDeepEqual(final, board);
@@ -232,4 +246,134 @@ test("geometric passing lanes flag nearby opponents without fabricated scores", 
   const options = passingOptions(b);
   assert.equal(options.length, 4);
   assert.ok(options.every((p) => typeof p.blocked === "boolean"));
+});
+
+test("overlay and validator reject the same blocked pass, using positions at each step", () => {
+  const base = createBoard("press");
+  const board = {
+    ...base,
+    players: base.players.map((p) =>
+      p.team === "arsenal" ? { ...p, x: 96, y: 96 } : p,
+    ),
+  };
+  const blocked = movePlayer(board, "ars-st", { x: 16.5, y: 41.5 });
+  const sequence = curatedAnalysis({
+    scenario: "press",
+    board,
+    question: "free player",
+  }).analysis!;
+  const pass = {
+    type: "pass" as const,
+    fromId: "gk",
+    toId: "lcb",
+    durationMs: 1000,
+    caption: "Play into the center back.",
+  };
+  assert.equal(
+    passingOptions(blocked).find((o) => o.player.id === "lcb")!.blocked,
+    true,
+  );
+  assert.deepEqual(passLane(blocked, "gk", "lcb").blockerIds, ["ars-st"]);
+  assert.throws(
+    () => validateSequence({ ...sequence, actions: [pass] }, blocked),
+    /blocked lane/,
+  );
+  const move = {
+    type: "move" as const,
+    playerId: "lcb",
+    targetX: 25,
+    targetY: 67,
+    durationMs: 1000,
+    caption: "Move into an open receiving lane.",
+  };
+  assert.doesNotThrow(() =>
+    validateSequence({ ...sequence, actions: [move, pass] }, blocked),
+  );
+  const open = applyAction(blocked, move);
+  assert.equal(passLane(open, "gk", "lcb").blocked, false);
+  assert.throws(
+    () =>
+      validateSequence(
+        { ...sequence, actions: [{ ...move, targetY: 33 }, pass] },
+        open,
+      ),
+    /blocked lane/,
+  );
+});
+
+test("lane geometry includes receiver pressure and keeps a consistent clearance boundary", () => {
+  const base = createBoard("press");
+  let board = {
+    ...base,
+    players: base.players.map((p) =>
+      p.team === "arsenal" ? { ...p, x: 96, y: 96 } : p,
+    ),
+  };
+  board = movePlayer(board, "lcb", { x: 25, y: 50 });
+  board = movePlayer(board, "ars-st", {
+    x: 25 + PASS_LANE_CLEARANCE - 0.01,
+    y: 50,
+  });
+  assert.equal(passLane(board, "gk", "lcb").blocked, true);
+  board = movePlayer(board, "ars-st", { x: 25 + PASS_LANE_CLEARANCE, y: 50 });
+  assert.equal(passLane(board, "gk", "lcb").blocked, false);
+  assert.equal(passLane(board, "gk", "ars-st").blocked, true);
+  assert.equal(passLane(board, "gk", "gk").blocked, true);
+});
+
+test("routing finds an open supporting pass and honors the remaining pass budget", () => {
+  const base = createBoard("press");
+  const board = movePlayer(
+    {
+      ...base,
+      players: base.players.map((p) =>
+        p.team === "arsenal" ? { ...p, x: 96, y: 96 } : p,
+      ),
+    },
+    "ars-st",
+    { x: 16.5, y: 41.5 },
+  );
+  assert.equal(findPassingRoute(board, "lcb", 1), null);
+  const path = findPassingRoute(board, "lcb", 2)!;
+  assert.equal(path.length, 2);
+  assert.equal(path.at(-1), "lcb");
+  let owner = board.possession;
+  for (const id of path) {
+    assert.equal(passLane(board, owner, id).blocked, false);
+    owner = id;
+  }
+});
+
+test("curated routes remain open after formation edits and changed possession", () => {
+  for (const scenario of ["press", "block", "lead"] as const)
+    for (const formation of formationNames)
+      for (const exploration of explorations) {
+        const board = {
+          ...changeFormation(createBoard(scenario), "tottenham", formation),
+          possession: "lw",
+        };
+        const result = curatedAnalysis({
+          scenario,
+          board,
+          question: exploration.question,
+        });
+        const seq = validateSequence(result.analysis, board);
+        assert.ok(seq.actions.filter((a) => a.type === "pass").length <= 4);
+      }
+});
+
+test("a surrounded ball carrier gets a shape-only guide with an honest explanation", () => {
+  const board = movePlayer(createBoard("press"), "ars-st", { x: 8, y: 50 });
+  const result = curatedAnalysis({
+    scenario: "press",
+    board,
+    question: "free player",
+  });
+  assert.equal(findPassingRoute(board, "lcb", 4), null);
+  assert.equal(
+    result.analysis!.actions.some((a) => a.type === "pass"),
+    false,
+  );
+  assert.match(result.notice!, /no open route/);
+  assert.equal(applyActions(board, result.analysis!.actions).possession, "gk");
 });

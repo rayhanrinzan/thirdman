@@ -1,6 +1,7 @@
 import { clamp } from "./tactics";
 import {
   applyActions,
+  findPassingRoute,
   validateSequence,
   type Board,
   type Action,
@@ -307,22 +308,34 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
     };
   }
   const ownsBall = get(b.possession).team === "tottenham";
+  let rerouted = false,
+    omitted = false;
   if (ownsBall) {
-    let owner = b.possession;
+    let passCount = 0;
+    const reached = new Set<string>();
     for (const to of route) {
-      if (owner === to) continue;
-      const final = applyActions(b, actions);
-      const from = final.players.find((p) => p.id === owner)!,
-        dest = final.players.find((p) => p.id === to)!;
-      if (Math.hypot(from.x - dest.x, from.y - dest.y) < 1) continue;
-      actions.push({
-        type: "pass",
-        fromId: owner,
-        toId: to,
-        durationMs: 1000,
-        caption: `${from.role} finds ${dest.role}. ${to === "dm" ? "Use the extra outlet before the press can shift." : to === "lb" ? "Use the width created by the inside movement." : "Keep the next connection available."}`,
-      });
-      owner = to;
+      if (reached.has(to)) continue;
+      const current = applyActions(b, actions);
+      const path = findPassingRoute(current, to, 4 - passCount);
+      if (!path) {
+        omitted = true;
+        continue;
+      }
+      rerouted ||= path.length > 1;
+      for (const receiver of path) {
+        const state = applyActions(b, actions);
+        const from = state.players.find((p) => p.id === state.possession)!,
+          dest = state.players.find((p) => p.id === receiver)!;
+        actions.push({
+          type: "pass",
+          fromId: from.id,
+          toId: dest.id,
+          durationMs: 1000,
+          caption: `${from.role} finds ${dest.role} through an open lane.${path.length > 1 ? " Recycle around the blocked direct route." : ""}`,
+        });
+        passCount++;
+        reached.add(receiver);
+      }
     }
   }
   sequence.actions = actions;
@@ -333,7 +346,11 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
     analysis: validateSequence(sequence, b),
     source: "fallback",
     notice: ownsBall
-      ? null
+      ? omitted
+        ? "Some intended connections have no open route within this short sequence. Only open passes are shown; adjust the support positions to connect further."
+        : rerouted
+          ? "The direct route is blocked. This sequence recycles through an open supporting lane."
+          : null
       : "Arsenal has the ball. This guide shows the shape change only; give Tottenham possession to explore the passing sequence.",
   };
 }
