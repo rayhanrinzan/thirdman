@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 /** Landscape pitch: x increases toward Arsenal's goal (left → right); y increases top → bottom.
  * Tottenham always attacks +x. Coordinates are percentages of the playing surface, never pixels. */
 export type Position = { x: number; y: number };
@@ -177,80 +175,4 @@ export function initialPlayers(scenario: ScenarioId): Player[] {
       y,
     }));
   });
-}
-const text = (max: number) => z.string().trim().min(1).max(max);
-export const analysisSchema = z
-  .object({
-    headline: text(90),
-    diagnosis: text(320),
-    principle: text(180),
-    recommendation: z
-      .object({
-        playerId: text(30),
-        instruction: text(220),
-        targetX: z.number(),
-        targetY: z.number(),
-      })
-      .strict(),
-    whyItWorks: z.array(text(150)).length(3),
-    risk: text(240),
-    opponentCounter: text(300),
-    beforeLabel: text(45),
-    afterLabel: text(45),
-  })
-  .strict();
-export type Analysis = z.infer<typeof analysisSchema>;
-export const requestSchema = z
-  .object({
-    scenario: z.enum(scenarioIds),
-    question: text(500),
-    userFormation: text(30),
-    opponentFormation: text(30),
-    players: z
-      .array(
-        z
-          .object({
-            id: text(30),
-            role: text(8),
-            team: z.enum(["tottenham", "arsenal"]),
-            x: z.number().min(4).max(96),
-            y: z.number().min(4).max(96),
-          })
-          .strict(),
-      )
-      .length(22),
-  })
-  .strict()
-  .superRefine((data, ctx) => {
-    const expected = initialPlayers(data.scenario);
-    if (
-      new Set(data.players.map((p) => p.id)).size !== 22 ||
-      expected.some(
-        (e) =>
-          !data.players.some(
-            (p) => p.id === e.id && p.team === e.team && p.role === e.role,
-          ),
-      )
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Player roster does not match this scenario",
-        path: ["players"],
-      });
-    }
-  });
-export type AnalysisRequest = z.infer<typeof requestSchema>;
-export function validateAnalysis(value: unknown, players: Player[]): Analysis {
-  const analysis = analysisSchema.parse(value);
-  const player = players.find((p) => p.id === analysis.recommendation.playerId);
-  if (!player || player.team !== "tottenham")
-    throw new Error("Invalid recommended player");
-  return {
-    ...analysis,
-    recommendation: {
-      ...analysis.recommendation,
-      targetX: clamp(analysis.recommendation.targetX),
-      targetY: clamp(analysis.recommendation.targetY),
-    },
-  };
 }

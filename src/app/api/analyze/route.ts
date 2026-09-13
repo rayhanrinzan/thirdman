@@ -1,4 +1,4 @@
-import { requestSchema } from "@/lib/tactics";
+import { labRequestSchema } from "@/lib/lab";
 import { analyzeBoard } from "@/lib/openai";
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       }
       chunks.push(value);
     }
-    const input = requestSchema.safeParse(
+    const input = labRequestSchema.safeParse(
       JSON.parse(Buffer.concat(chunks).toString("utf8")),
     );
     if (!input.success)

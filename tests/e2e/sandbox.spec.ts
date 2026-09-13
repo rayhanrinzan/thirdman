@@ -1,164 +1,316 @@
 import { test, expect } from "@playwright/test";
-import { initialPlayers, scenarios } from "../../src/lib/tactics";
+import { createBoard } from "../../src/lib/lab";
+import { scenarios } from "../../src/lib/tactics";
+const dm = (page: import("@playwright/test").Page) =>
+  page.locator('[data-player-id="dm"]');
+async function explore(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Make the spare player" }),
+  ).toBeVisible();
+}
 
-test("complete no-key demo, every scenario, reset, modal and clean console", async ({
+test("complete press story: reversible playback, apply, response, compare, undo and reset", async ({
   page,
 }) => {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
   });
   await page.goto("/");
   await expect(page.locator(".player")).toHaveCount(22);
-  await expect(
-    page.getByRole("button", { name: "ANALYZE SHAPE", exact: true }),
-  ).toBeDisabled();
+  await expect(page.getByRole("complementary")).toHaveCount(0);
+  await explore(page);
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
   await page
-    .getByRole("button", { name: "How do we beat this press?", exact: true })
+    .getByRole("button", { name: "Play sequence", exact: true })
     .click();
-  await page.getByRole("textbox").press("Enter");
   await expect(
-    page.getByRole("heading", { name: "Create a 3v2 in the first line" }),
+    page.getByRole("button", { name: "Replay sequence", exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+  await expect(dm(page)).toHaveAttribute("data-x", "25.00");
+  await expect(page.locator(".ball")).toHaveAttribute("data-possession", "rcb");
+  await page
+    .getByRole("button", { name: "Cancel preview", exact: true })
+    .first()
+    .click();
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
+  await expect(page.locator(".ball")).toHaveAttribute("data-possession", "gk");
+  await explore(page);
+  await page
+    .getByRole("button", { name: "Apply final shape", exact: true })
+    .click();
+  await expect(dm(page)).toHaveAttribute("data-x", "25.00");
+  await page
+    .getByRole("button", { name: "Explore Arsenal’s response", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Close one door. Open another." }),
   ).toBeVisible();
   await page
-    .getByRole("button", { name: "APPLY ADJUSTMENT", exact: true })
+    .getByRole("button", { name: "Apply response", exact: true })
     .click();
-  const dm = page.locator('[data-player-id="dm"]');
-  await expect(dm).toHaveAttribute("data-x", "25.00");
-  await expect(dm).toHaveAttribute("data-y", "50.00");
-  await expect(page.locator(".board-status")).toContainText("2v2 first line");
-  await expect(page.locator(".board-status")).toContainText("3v2 overload");
+  await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
+    "data-x",
+    "34.00",
+  );
+  await expect(page.locator(".space-note")).toContainText("Space behind");
+  await page.getByRole("button", { name: "Original", exact: true }).click();
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
+  await page
+    .getByRole("button", { name: "Tottenham adjustment", exact: true })
+    .click();
+  await expect(dm(page)).toHaveAttribute("data-x", "25.00");
+  await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
+    "data-x",
+    "62.00",
+  );
+  await page
+    .getByRole("button", { name: "Arsenal response", exact: true })
+    .click();
+  await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
+    "data-x",
+    "34.00",
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(dm(page)).toHaveAttribute("data-x", "25.00");
+  await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
+    "data-x",
+    "62.00",
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(page.getByRole("complementary")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "ADJUSTMENT APPLIED", exact: true }),
+    page.getByRole("button", { name: "Undo", exact: true }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "ASK OPPOSITION AI" }).click();
-  await expect(page.locator(".opposition")).toContainText("3v3");
-  await page.getByRole("button", { name: "RESET", exact: true }).click();
-  await expect(dm).toHaveAttribute("data-x", "43.00");
-  await expect(page.getByRole("textbox")).toHaveValue("");
-  await expect(page.locator(".pitch-annotation")).toHaveCount(0);
-  for (const [name, role, x, y] of [
-    ["Break a low block", "lw", "81.00", "27.00"],
-    ["Protect a lead", "rcm", "42.00", "62.00"],
-  ]) {
-    await page.getByRole("button", { name: new RegExp(name) }).click();
-    await page.getByRole("textbox").fill("How can we improve this shape?");
-    await page
-      .getByRole("button", { name: "ANALYZE SHAPE", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "APPLY ADJUSTMENT", exact: true })
-      .click();
-    await expect(page.locator(`[data-player-id="${role}"]`)).toHaveAttribute(
-      "data-x",
-      x,
-    );
-    await expect(page.locator(`[data-player-id="${role}"]`)).toHaveAttribute(
-      "data-y",
-      y,
-    );
-  }
-  await page.getByRole("button", { name: "HOW IT WORKS" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("dialog").getByRole("button")).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "HOW IT WORKS" }),
-  ).toBeFocused();
+  expect(errors).toEqual([]);
   expect(
     await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
+      () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
-  expect(errors).toEqual([]);
 });
 
-test("dragging, keyboard movement, responsive coordinates and stale analysis clearing", async ({
+test("pause freezes a ball mid-pass; stepping, scrubbing, and replay are reversible", async ({
   page,
 }) => {
   await page.goto("/");
-  const dm = page.locator('[data-player-id="dm"]');
-  await dm.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(dm).toHaveAttribute("data-x", "44.00");
+  await explore(page);
+  const slider = page.getByRole("slider", { name: "Sequence progress" });
+  await slider.fill("1600");
   await page
-    .getByRole("button", { name: "How do we beat this press?", exact: true })
+    .getByRole("button", { name: "Play sequence", exact: true })
     .click();
-  await page.getByRole("textbox").press("Enter");
+  await page.waitForTimeout(180);
+  await page
+    .getByRole("button", { name: "Pause sequence", exact: true })
+    .click();
+  const x = await page.locator(".ball").getAttribute("data-x");
+  await page.waitForTimeout(300);
+  await expect(page.locator(".ball")).toHaveAttribute("data-x", x!);
+  await page
+    .getByRole("button", { name: "Previous step", exact: true })
+    .click();
+  await expect(slider).toHaveValue("1400");
+  await page.getByRole("button", { name: "Next step", exact: true }).click();
+  await expect(slider).toHaveValue("2400");
+  await page
+    .getByRole("button", { name: "Restart sequence", exact: true })
+    .click();
   await expect(
-    page.getByRole("button", { name: "APPLY ADJUSTMENT", exact: true }),
+    page.getByRole("button", { name: "Pause sequence", exact: true }),
   ).toBeVisible();
-  // Mouse PointerEvents exercise the same captured-pointer path as touch.
-  await dm.scrollIntoViewIfNeeded();
-  const before = await dm.boundingBox();
-  const board = await page.locator(".pitch").boundingBox();
-  if (!before || !board) throw new Error("Missing board");
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
+  await page.waitForTimeout(500);
+  await expect(dm(page)).toHaveAttribute("data-x", "43.00");
+});
+
+test("edit both teams, transfer possession, change formations, and undo redo", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Arsenal", exact: true }).click();
+  const p = page.locator('[data-player-id="ars-dm"]');
+  await p.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(p).toHaveAttribute("data-x", "61.00");
+  await expect(page.getByText("Edited shape", { exact: true })).toBeVisible();
+  await p.click();
+  await page
+    .getByRole("button", { name: "Give possession", exact: true })
+    .click();
+  await expect(page.locator(".ball")).toHaveAttribute(
+    "data-possession",
+    "ars-dm",
+  );
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.locator(".ball")).toHaveAttribute("data-possession", "gk");
+  await page.getByRole("button", { name: "Redo", exact: true }).click();
+  await expect(page.locator(".ball")).toHaveAttribute(
+    "data-possession",
+    "ars-dm",
+  );
+  await page
+    .getByRole("combobox", { name: "Formation", exact: true })
+    .selectOption("3–2–5");
+  await expect(p).toHaveText("CB");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(p).toHaveText("LCM");
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
+  const target = dm(page),
+    bounds = await target.boundingBox(),
+    pitch = await page.locator(".pitch").boundingBox();
+  if (!bounds || !pitch) throw new Error("Missing pitch");
   await page.mouse.move(
-    before.x + before.width / 2,
-    before.y + before.height / 2,
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
   );
   await page.mouse.down();
   await page.mouse.move(
-    board.x + board.width * 0.55,
-    board.y + board.height * 0.55,
-    { steps: 10 },
+    pitch.x + pitch.width * 0.48,
+    pitch.y + pitch.height * 0.55,
+    { steps: 8 },
   );
   await page.mouse.up();
-  expect(Number(await dm.getAttribute("data-x"))).toBeCloseTo(55, 0);
-  await expect(
-    page.getByRole("button", { name: "APPLY ADJUSTMENT", exact: true }),
-  ).toHaveCount(0);
-  await page.setViewportSize({ width: 600, height: 850 });
-  await expect(dm).toHaveAttribute("data-x", /55/);
-  await dm.focus();
-  for (let i = 0; i < 24; i++) await page.keyboard.press("Shift+ArrowLeft");
-  await expect(dm).toHaveAttribute("data-x", "4.00");
+  expect(Number(await target.getAttribute("data-x"))).toBeCloseTo(48, 0);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(target).toHaveAttribute("data-x", "43.00");
 });
 
-test("reset cancels an in-flight result and network failure still supplies a move", async ({
+test("all scenarios and distinct curated questions have usable sequences", async ({
+  page,
+}) => {
+  await page.goto("/");
+  for (const [label, id] of [
+    ["Invert fullback", "lb"],
+    ["Overlap", "lw"],
+    ["Double pivot", "rcm"],
+  ]) {
+    await page.getByRole("button", { name: label, exact: true }).click();
+    await page
+      .getByRole("button", { name: "Apply final shape", exact: true })
+      .click();
+    await expect(page.locator(`[data-player-id="${id}"]`)).toBeVisible();
+    await page.getByRole("button", { name: "Reset", exact: true }).click();
+  }
+  for (const [scenario, heading] of [
+    ["block", "Connect through the half-space"],
+    ["lead", "Keep two players behind the ball"],
+  ]) {
+    await page
+      .getByRole("combobox", { name: "Scenario", exact: true })
+      .selectOption(scenario);
+    await page.getByRole("button", { name: "Explore", exact: true }).click();
+    await expect(page.getByRole("heading", { name: heading })).toBeVisible();
+    await page
+      .getByRole("button", { name: "Apply final shape", exact: true })
+      .click();
+  }
+  await page
+    .getByRole("textbox", { name: "Tactical question" })
+    .fill("Who will win the league?");
+  await page.getByRole("textbox").press("Enter");
+  await expect(page.locator(".question-dock")).toContainText(
+    "This question needs live AI",
+  );
+  await expect(page.getByRole("complementary")).toHaveCount(0);
+});
+
+test("overlays, help focus, empty questions, and reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  for (const choice of ["passing", "shape", "pressure"]) {
+    await page
+      .getByRole("combobox", { name: "Tactical overlay", exact: true })
+      .selectOption(choice);
+    await expect(page.locator(".board-context")).toContainText(
+      choice === "passing"
+        ? "Nearest four"
+        : choice === "shape"
+          ? "Outfield"
+          : "Opponents within",
+    );
+  }
+  await page.getByRole("textbox").fill("");
+  await expect(
+    page.getByRole("button", { name: "Explore", exact: true }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Free player", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Next step", exact: true })
+    .first()
+    .click();
+  await expect(dm(page)).toHaveAttribute("data-x", "25.00");
+  await expect(
+    page.getByRole("button", { name: "Pause sequence", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "How it works", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Close how it works", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "How it works", exact: true }),
+  ).toBeFocused();
+});
+
+test("reset cancels stale requests and network failure recovers with a sequence", async ({
   page,
 }) => {
   await page.goto("/");
   await page.route("**/api/analyze", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((r) => setTimeout(r, 800));
     await route.abort().catch(() => {});
   });
-  await page.getByRole("textbox").fill("How do we beat this press?");
-  await page.getByRole("textbox").press("Enter");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "READING THE SHAPE..." }),
+    page.getByRole("button", { name: "Reading the shape…" }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "RESET", exact: true }).click();
-  await expect(page.getByRole("textbox")).toHaveValue("");
+  await page.getByRole("button", { name: "Reset", exact: true }).click();
+  await page.waitForTimeout(1000);
+  await expect(page.getByRole("complementary")).toHaveCount(0);
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "APPLY ADJUSTMENT", exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole("textbox").fill("How do we beat this press?");
-  await page.getByRole("textbox").press("Enter");
-  await expect(
-    page.getByRole("button", { name: "APPLY ADJUSTMENT", exact: true }),
+    page.getByRole("heading", { name: "Make the spare player" }),
   ).toBeVisible();
 });
 
-test("API fallback and input validation", async ({ request }) => {
+test("API validates rosters, possession and request size; all no-key scenarios work", async ({
+  request,
+}) => {
   for (const scenario of ["press", "block", "lead"] as const) {
-    const response = await request.post("/api/analyze", {
+    const r = await request.post("/api/analyze", {
       data: {
         scenario,
         question: scenarios[scenario].question,
-        userFormation: scenarios[scenario].userFormation,
-        opponentFormation: scenarios[scenario].opponentFormation,
-        players: initialPlayers(scenario),
+        board: createBoard(scenario),
       },
     });
-    expect(response.status()).toBe(200);
-    const data = await response.json();
-    expect(data.source).toBe("fallback");
-    expect(data.analysis.whyItWorks).toHaveLength(3);
+    expect(r.status()).toBe(200);
+    const result = await r.json();
+    expect(result.source).toBe("fallback");
+    expect(result.analysis.actions.length).toBeGreaterThan(1);
   }
+  const board = createBoard("press");
+  expect(
+    (
+      await request.post("/api/analyze", {
+        data: {
+          scenario: "press",
+          question: "free player",
+          board: { ...board, possession: "missing" },
+        },
+      })
+    ).status(),
+  ).toBe(400);
   expect(
     (await request.post("/api/analyze", { data: { question: "" } })).status(),
   ).toBe(400);
