@@ -2,6 +2,9 @@ import { clamp } from "./tactics";
 import {
   applyActions,
   findPassingRoute,
+  passDuration,
+  passLane,
+  distance,
   validateSequence,
   type Board,
   type Action,
@@ -31,7 +34,9 @@ export function detectIntent(
     return "pivot";
   if (/half.?space|low block|between the lines/.test(q)) return "halfspace";
   if (
-    /press|free (player|man)|overload|buildup|build.up|midfielder jumps/.test(q)
+    /press|free (player|man)|overload|buildup|build.up|midfielder jumps|draw|bait|lure|switch play|one.?two/.test(
+      q,
+    )
   )
     return scenario === "block"
       ? "halfspace"
@@ -232,9 +237,9 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
         b,
         move(
           "lw",
-          clamp(Math.max(wing.x, 72) + 4),
+          clamp(Math.max(wing.x, 72) - 1),
           27,
-          "The winger arrives between the opposition fullback and center back.",
+          "The winger checks into the half-space for a diagonal return.",
         ),
       ),
     ];
@@ -308,10 +313,61 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
     };
   }
   const ownsBall = get(b.possession).team === "tottenham";
+  if (ownsBall && /draw|bait|lure/.test(input.question.toLowerCase())) {
+    actions.push({
+      type: "highlight",
+      playerIds: [b.possession],
+      durationMs: 700,
+      caption:
+        "Invite the nearest defender toward the ball before finding the next outlet.",
+    });
+  }
+  // Do not hold a pressured carrier while waiting for off-ball runs to finish.
+  let releasedEarly = false;
+  const hasOutlet = (board: Board) =>
+    board.players.some(
+      (p) =>
+        p.team === get(board.possession).team &&
+        p.id !== board.possession &&
+        !passLane(board, board.possession, p.id).blocked,
+    );
+  if (ownsBall && !hasOutlet(applyActions(b, actions))) {
+    const moving = new Set(
+      actions
+        .filter((a): a is MoveAction => a.type === "move")
+        .map((a) => a.playerId),
+    );
+    const options = b.players
+      .filter(
+        (p) =>
+          p.team === "tottenham" && p.id !== b.possession && !moving.has(p.id),
+      )
+      .sort(
+        (a, c) =>
+          distance(get(b.possession), a) - distance(get(b.possession), c),
+      );
+    for (const receiver of options) {
+      if (passLane(b, b.possession, receiver.id).blocked) continue;
+      const release: Action = {
+        type: "pass",
+        fromId: b.possession,
+        toId: receiver.id,
+        durationMs: passDuration(b, b.possession, receiver.id),
+        caption: `Release to ${receiver.role} before pressure arrives, then make the off-ball run.`,
+      };
+      if (!hasOutlet(applyActions(b, [release, ...actions]))) continue;
+      actions = actions.map((a) =>
+        a.type === "highlight" ? { ...a, playerIds: [receiver.id] } : a,
+      );
+      actions.unshift(release);
+      releasedEarly = true;
+      break;
+    }
+  }
   let rerouted = false,
     omitted = false;
   if (ownsBall) {
-    let passCount = 0;
+    let passCount = actions.filter((a) => a.type === "pass").length;
     const reached = new Set<string>();
     for (const to of route) {
       if (reached.has(to)) continue;
@@ -330,8 +386,8 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
           type: "pass",
           fromId: from.id,
           toId: dest.id,
-          durationMs: 1000,
-          caption: `${from.role} finds ${dest.role} through an open lane.${path.length > 1 ? " Recycle around the blocked direct route." : ""}`,
+          durationMs: passDuration(state, from.id, dest.id),
+          caption: `${from.role} finds ${dest.role} before the press can close the lane.${path.length > 1 ? " Draw pressure, then recycle to the spare player." : ""}`,
         });
         passCount++;
         reached.add(receiver);
@@ -349,8 +405,10 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
       ? omitted
         ? "Some intended connections have no open route within this short sequence. Only open passes are shown; adjust the support positions to connect further."
         : rerouted
-          ? "The direct route is blocked. This sequence recycles through an open supporting lane."
-          : null
+          ? "The direct route is blocked or closes as defenders react. Circulation draws pressure before finding an open supporting lane."
+          : releasedEarly
+            ? "Release the ball before the off-ball movement; waiting would let the press close every outlet."
+            : null
       : "Arsenal has the ball. This guide shows the shape change only; give Tottenham possession to explore the passing sequence.",
   };
 }

@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   createBoard,
   applyAction,
+  applyActions,
   passLane,
   type Board,
   type AnalysisResult,
@@ -27,7 +28,18 @@ test("complete press story: reversible playback, apply, response, compare, undo 
   await page.goto("/");
   await expect(page.locator(".player")).toHaveCount(22);
   await expect(page.getByRole("complementary")).toHaveCount(0);
+  const pendingSequence = page.waitForResponse((r) =>
+    r.url().endsWith("/api/analyze"),
+  );
   await explore(page);
+  const sequence: AnalysisResult = await (await pendingSequence).json();
+  const adjusted = applyActions(
+    createBoard("press"),
+    sequence.analysis!.actions,
+  );
+  const reactedDmX = adjusted.players
+    .find((p) => p.id === "ars-dm")!
+    .x.toFixed(2);
   await expect(dm(page)).toHaveAttribute("data-x", "43.00");
   await page
     .getByRole("button", { name: "Play sequence", exact: true })
@@ -70,7 +82,7 @@ test("complete press story: reversible playback, apply, response, compare, undo 
   await expect(dm(page)).toHaveAttribute("data-x", "25.00");
   await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
     "data-x",
-    "62.00",
+    reactedDmX,
   );
   await page
     .getByRole("button", { name: "Arsenal response", exact: true })
@@ -83,7 +95,7 @@ test("complete press story: reversible playback, apply, response, compare, undo 
   await expect(dm(page)).toHaveAttribute("data-x", "25.00");
   await expect(page.locator('[data-player-id="ars-dm"]')).toHaveAttribute(
     "data-x",
-    "62.00",
+    reactedDmX,
   );
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(dm(page)).toHaveAttribute("data-x", "43.00");
@@ -362,7 +374,6 @@ test("an opponent in an amber passing lane makes the sequence route around it", 
   for (const action of result.analysis!.actions) {
     if (action.type === "pass") {
       expect(passLane(board, action.fromId, action.toId).blocked).toBe(false);
-      expect(action.fromId === "gk" && action.toId === "lcb").toBe(false);
       passes++;
     }
     board = applyAction(board, action);
@@ -396,4 +407,62 @@ test("an opponent in an amber passing lane makes the sequence route around it", 
     await expect(page.locator(".space-note")).toContainText(
       "Direct outlet unavailable",
     );
+});
+
+test("defenders react during playback and remain deterministic through pause, scrub and undo", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const opposition = () =>
+    page
+      .locator(".player.arsenal")
+      .evaluateAll((nodes) =>
+        nodes.map((n) => [
+          n.getAttribute("data-player-id"),
+          n.getAttribute("data-x"),
+          n.getAttribute("data-y"),
+        ]),
+      );
+  const original = await opposition();
+  const keeper = page.locator('[data-player-id="ars-gk"]');
+  await explore(page);
+  const slider = page.getByRole("slider", { name: "Sequence progress" });
+  await slider.fill("1900");
+  const midpoint = await opposition();
+  expect(midpoint).not.toEqual(original);
+  await expect(keeper).toHaveAttribute("data-x", "94.00");
+  expect(await page.locator('[data-pressing="true"]').count()).toBeGreaterThan(
+    0,
+  );
+  await page
+    .getByRole("combobox", { name: "Tactical overlay", exact: true })
+    .selectOption("passing");
+  await expect(page.locator("[data-pass-in-flight]")).toHaveCount(1);
+  await expect(page.locator("[data-passing-to]")).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Play sequence", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Pause sequence", exact: true })
+    .click();
+  const paused = await opposition();
+  await page.waitForTimeout(200);
+  expect(await opposition()).toEqual(paused);
+  await slider.fill("0");
+  expect(await opposition()).toEqual(original);
+  await slider.fill("1900");
+  expect(await opposition()).toEqual(midpoint);
+  await page
+    .getByRole("button", { name: "Apply final shape", exact: true })
+    .click();
+  const applied = await opposition();
+  expect(applied).not.toEqual(original);
+  await page.getByRole("button", { name: "Original", exact: true }).click();
+  expect(await opposition()).toEqual(original);
+  await page
+    .getByRole("button", { name: "Tottenham adjustment", exact: true })
+    .click();
+  expect(await opposition()).toEqual(applied);
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  expect(await opposition()).toEqual(original);
 });

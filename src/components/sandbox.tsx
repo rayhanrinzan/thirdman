@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { MotionConfig, useReducedMotion } from "motion/react";
 import {
   ArrowRight,
@@ -33,7 +33,8 @@ import {
   historyReducer,
   movePlayer,
   passLane,
-  sampleSequence,
+  compileSequence,
+  sampleTimeline,
   totalDuration,
   validateSequence,
   type AnalysisResult,
@@ -87,15 +88,35 @@ export default function Sandbox() {
     : [];
   const duration = totalDuration(actions),
     timeline = useTimeline(duration);
-  const adjusted = session
-    ? applyActions(session.base, session.analysis.actions)
-    : history.board;
+  const mainTimeline = useMemo(
+    () =>
+      compileSequence(
+        session?.base ?? history.board,
+        session?.analysis.actions ?? [],
+      ),
+    [session, history.board],
+  );
+  const adjusted = session ? mainTimeline.finalBoard : history.board;
   const base = session
     ? phase === "response"
       ? adjusted
       : session.base
     : history.board;
-  const sample = sampleSequence(base, actions, timeline.time);
+  const compiled = useMemo(
+    () =>
+      phase === "adjusted"
+        ? mainTimeline
+        : compileSequence(
+            base,
+            phase === "response" && session
+              ? session.analysis.opponent.movements
+              : [],
+          ),
+    [phase, mainTimeline, base, session],
+  );
+  const sample = sampleTimeline(compiled, timeline.time);
+  const currentAction = session ? actions[sample.index] : null;
+  const activePass = currentAction?.type === "pass" ? currentAction : null;
   const displayed = session ? sample.board : history.board;
   const owner = displayed.players.find((p) => p.id === displayed.possession)!;
   const selection = displayed.players.find((p) => p.id === selected);
@@ -306,7 +327,7 @@ export default function Sandbox() {
   }
   const overlayHint =
     overlay === "passing"
-      ? "Nearest four teammates · green: lane appears open · amber: opponent near lane"
+      ? "Nearest four teammates · green: open in this reaction model · amber: blocked or defender can reach the pass"
       : overlay === "shape"
         ? "Outfield team shapes · illustrative geometry"
         : overlay === "pressure"
@@ -502,6 +523,15 @@ export default function Sandbox() {
                 overlay={overlay}
                 ghosts={ghosts}
                 activeIds={session ? sample.activeIds : []}
+                pressingIds={session ? sample.pressingIds : []}
+                activePass={activePass}
+                previewLabel={
+                  phase === "original"
+                    ? "Original snapshot"
+                    : phase === "response"
+                      ? "Possible extra response"
+                      : "Reactive sequence"
+                }
                 response={
                   session && phase === "response"
                     ? session.analysis.opponent
@@ -614,7 +644,9 @@ export default function Sandbox() {
                   />
                   {overlayHint && (
                     <p className="overlay-note">
-                      {overlayHint}. Geometry only; not a pass prediction.
+                      {activePass && overlay === "passing"
+                        ? "Ball in flight · showing the current pass; options update on reception."
+                        : `${overlayHint}. Illustrative reactions, not a match prediction.`}
                     </p>
                   )}
                 </div>
@@ -623,7 +655,7 @@ export default function Sandbox() {
                   <p>{overlayHint ?? scenarios[scenario].description}</p>
                   <span>
                     {overlayHint
-                      ? "Illustrative geometry"
+                      ? "Illustrative reaction model"
                       : `Editing ${teamName(team)} · select or drag a player`}
                   </span>
                 </div>
@@ -722,7 +754,7 @@ export default function Sandbox() {
                               displayed.possession,
                               session.analysis.opponent.outletPlayerId,
                             ).blocked
-                              ? "Direct outlet unavailable. Reposition or recycle to reach this space."
+                              ? "Direct outlet unavailable against the reacting defense. Reposition or recycle to reach this space."
                               : "Dashed route: an open lane to a possible next connection"}
                           </small>
                         </div>

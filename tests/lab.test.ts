@@ -13,6 +13,12 @@ import {
   movePlayer,
   passingOptions,
   passLane,
+  staticPassLane,
+  simulateAction,
+  sweptBallDistance,
+  passDuration,
+  compileSequence,
+  sampleTimeline,
   findPassingRoute,
   PASS_LANE_CLEARANCE,
   sampleSequence,
@@ -316,7 +322,8 @@ test("lane geometry includes receiver pressure and keeps a consistent clearance 
   });
   assert.equal(passLane(board, "gk", "lcb").blocked, true);
   board = movePlayer(board, "ars-st", { x: 25 + PASS_LANE_CLEARANCE, y: 50 });
-  assert.equal(passLane(board, "gk", "lcb").blocked, false);
+  assert.equal(staticPassLane(board, "gk", "lcb").blocked, false);
+  assert.equal(passLane(board, "gk", "lcb").blocked, true); // A defender can close the boundary during flight.
   assert.equal(passLane(board, "gk", "ars-st").blocked, true);
   assert.equal(passLane(board, "gk", "gk").blocked, true);
 });
@@ -376,4 +383,218 @@ test("a surrounded ball carrier gets a shape-only guide with an honest explanati
   );
   assert.match(result.notice!, /no open route/);
   assert.equal(applyActions(board, result.analysis!.actions).possession, "gk");
+});
+
+test("reactive playback moves the nearest defenders and shifts the block without moving goalkeepers", () => {
+  const board = createBoard("press");
+  const pass = {
+    type: "pass" as const,
+    fromId: "gk",
+    toId: "lcb",
+    durationMs: 1000,
+    caption: "Draw the first presser.",
+  };
+  const result = simulateAction(board, pass);
+  const final = result.frames.at(-1)!.board;
+  assert.ok(
+    final.players.some(
+      (p) =>
+        p.team === "arsenal" &&
+        p.x !== board.players.find((q) => q.id === p.id)!.x,
+    ),
+  );
+  for (const p of final.players) {
+    if (p.team === "tottenham" || p.role === "GK")
+      assert.deepEqual(
+        p,
+        board.players.find((q) => q.id === p.id),
+      );
+    assert.ok(p.x >= 4 && p.x <= 96 && p.y >= 4 && p.y <= 96);
+  }
+  assert.ok(result.frames.some((f) => f.pressingIds.length > 0));
+  assert.ok(result.frames.every((f) => f.pressingIds.length <= 2));
+  for (let i = 1; i < result.frames.length; i++) {
+    const a = result.frames[i - 1],
+      b = result.frames[i];
+    for (const p of b.board.players.filter((p) => p.team === "arsenal")) {
+      const q = a.board.players.find((q) => q.id === p.id)!;
+      assert.ok(
+        Math.hypot(p.x - q.x, (p.y - q.y) * 0.62) <=
+          (3.8 * (b.time - a.time)) / 1000 + 1e-8,
+        "Defenders must not teleport when pressing roles change",
+      );
+    }
+  }
+  assert.deepEqual(simulateAction(board, pass), result);
+  assert.deepEqual(board, createBoard("press"));
+});
+
+test("swept interception catches a ball and defender crossing between frames", () => {
+  assert.equal(
+    sweptBallDistance(
+      { x: 0, y: 50 },
+      { x: 20, y: 50 },
+      { x: 10, y: 50 },
+      { x: 10, y: 50 },
+    ),
+    0,
+  );
+  assert.equal(
+    sweptBallDistance(
+      { x: 0, y: 50 },
+      { x: 20, y: 50 },
+      { x: 10, y: 40 },
+      { x: 10, y: 60 },
+    ),
+    0,
+  );
+});
+
+test("an initially clear pass is rejected when a defender reaches it during flight", () => {
+  const base = createBoard("press");
+  let board = {
+    ...base,
+    players: base.players.map((p) =>
+      p.team === "arsenal" ? { ...p, x: 96, y: 96 } : p,
+    ),
+  };
+  board = movePlayer(board, "lcb", { x: 25, y: 50 });
+  board = movePlayer(board, "ars-st", { x: 29.1, y: 50 });
+  assert.equal(staticPassLane(board, "gk", "lcb").blocked, false);
+  assert.deepEqual(passLane(board, "gk", "lcb").blockerIds, ["ars-st"]);
+  assert.equal(
+    passingOptions(board).find((p) => p.player.id === "lcb")!.blocked,
+    true,
+  );
+  const fixture = curatedAnalysis({
+    scenario: "press",
+    board: base,
+    question: "free player",
+  }).analysis!;
+  assert.throws(
+    () =>
+      validateSequence(
+        {
+          ...fixture,
+          actions: [
+            {
+              type: "pass",
+              fromId: "gk",
+              toId: "lcb",
+              durationMs: 400,
+              caption: "Try an unrealistically fast pass.",
+            },
+          ],
+        },
+        board,
+      ),
+    /blocked lane/,
+  );
+});
+
+test("circulation can draw a presser away and reopen a lane; routing can revisit a player", () => {
+  const base = createBoard("press");
+  let board = {
+    ...base,
+    players: base.players.map((p) =>
+      !["gk", "lcb", "dm"].includes(p.id) ? { ...p, x: 96, y: 96 } : p,
+    ),
+  };
+  board = movePlayer(board, "lcb", { x: 30, y: 50 });
+  board = movePlayer(board, "dm", { x: 18, y: 80 });
+  board = movePlayer(board, "ars-st", { x: 20, y: 55.5 });
+  board = movePlayer(board, "ars-lw", { x: 25, y: 65 });
+  assert.equal(passLane(board, "gk", "lcb").blocked, true);
+  assert.equal(findPassingRoute(board, "lcb", 2), null);
+  assert.deepEqual(findPassingRoute(board, "lcb", 3), ["dm", "gk", "lcb"]);
+  let current = board;
+  for (const toId of ["dm", "gk"]) {
+    const fromId = current.possession;
+    assert.equal(passLane(current, fromId, toId).blocked, false);
+    current = applyAction(current, {
+      type: "pass",
+      fromId,
+      toId,
+      durationMs: passDuration(current, fromId, toId),
+      caption: "Invite pressure, return the ball.",
+    });
+  }
+  assert.equal(current.possession, "gk");
+  assert.ok(current.players.find((p) => p.id === "ars-st")!.y > 55.5);
+  assert.equal(passLane(current, "gk", "lcb").blocked, false);
+});
+
+test("scrub, replay and application share defensive frames; undo restores both teams", () => {
+  const board = createBoard("press");
+  const sequence = curatedAnalysis({
+    scenario: "press",
+    board,
+    question: "Draw the press and switch play",
+  }).analysis!;
+  assert.ok(sequence.actions.some((a) => a.type === "highlight"));
+  const compiled = compileSequence(board, sequence.actions);
+  const paused = sampleTimeline(compiled, 2055);
+  sampleTimeline(compiled, 100);
+  sampleTimeline(compiled, compiled.duration);
+  assert.deepEqual(sampleTimeline(compiled, 2055), paused);
+  assert.deepEqual(compiled.finalBoard, applyActions(board, sequence.actions));
+  assert.notDeepEqual(
+    compiled.finalBoard.players.filter((p) => p.team === "arsenal"),
+    board.players.filter((p) => p.team === "arsenal"),
+  );
+  let history: History = { board, past: [], future: [] };
+  history = historyReducer(history, {
+    type: "commit",
+    board: compiled.finalBoard,
+    label: "Reactive sequence",
+  });
+  history = historyReducer(history, { type: "undo" });
+  assert.deepEqual(history.board, board);
+  history = historyReducer(history, { type: "redo" });
+  assert.deepEqual(history.board, compiled.finalBoard);
+});
+
+test("pass timing is distance-based and cannot be shortened by model output", () => {
+  const board = createBoard("press");
+  const fixture = curatedAnalysis({
+    scenario: "press",
+    board,
+    question: "free player",
+  }).analysis!;
+  const sequence = validateSequence(
+    {
+      ...fixture,
+      actions: fixture.actions.map((a) =>
+        a.type === "pass" ? { ...a, durationMs: 400 } : a,
+      ),
+    },
+    board,
+  );
+  assert.deepEqual(sequence.actions, fixture.actions);
+  assert.ok(passDuration(board, "gk", "st") > passDuration(board, "gk", "lcb"));
+});
+
+test("all three default demos retain passing combinations against a moving defense", () => {
+  for (const scenario of ["press", "block", "lead"] as const) {
+    const board = createBoard(scenario);
+    const result = curatedAnalysis({
+      scenario,
+      board,
+      question: "create a free player",
+    });
+    assert.ok(
+      result.analysis!.actions.filter((a) => a.type === "pass").length >= 2,
+    );
+    const final = applyActions(board, result.analysis!.actions);
+    assert.notDeepEqual(
+      final.players.filter((p) => p.team === "arsenal"),
+      board.players.filter((p) => p.team === "arsenal"),
+    );
+    if (scenario === "block")
+      assert.equal(
+        result.analysis!.actions[0].type,
+        "pass",
+        "Release the pressured carrier before waiting for the winger's run",
+      );
+  }
 });

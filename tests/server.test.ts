@@ -137,3 +137,39 @@ test("a live sequence with an obstructed pass is rejected and recovered with ope
     restore();
   }
 });
+
+test("live output cannot bypass a moving defender by requesting an unrealistically fast pass", async () => {
+  process.env.OPENAI_API_KEY = "test-placeholder-not-a-real-key";
+  const board = {
+    ...input.board,
+    players: input.board.players.map((p) =>
+      p.team === "arsenal"
+        ? {
+            ...p,
+            x: p.id === "ars-st" ? 29.1 : 96,
+            y: p.id === "ars-st" ? 33 : 96,
+          }
+        : p,
+    ),
+  };
+  globalThis.fetch = async () =>
+    mockResponse({
+      ...fixture,
+      actions: [
+        {
+          type: "pass",
+          fromId: "gk",
+          toId: "lcb",
+          durationMs: 400,
+          caption: "Rush this pass.",
+        },
+      ],
+    });
+  try {
+    const result = await analyzeBoard({ ...input, board });
+    assert.equal(result.source, "fallback");
+    assert.ok(result.analysis);
+  } finally {
+    restore();
+  }
+});

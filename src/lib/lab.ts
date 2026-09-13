@@ -295,14 +295,9 @@ export type AnalysisResult = {
   source: "openai" | "fallback";
   notice: string | null;
 };
+// All committed and previewed actions advance the same deterministic defensive model.
 export function applyAction(board: Board, action: Action): Board {
-  if (action.type === "move")
-    return movePlayer(board, action.playerId, {
-      x: action.targetX,
-      y: action.targetY,
-    });
-  if (action.type === "pass") return { ...board, possession: action.toId };
-  return board;
+  return simulateAction(board, action).frames.at(-1)!.board;
 }
 export function applyActions(board: Board, actions: Action[]): Board {
   return actions.reduce(applyAction, board);
@@ -347,6 +342,7 @@ export function validateSequence(value: unknown, board: Board): Sequence {
         to = current.players.find((p) => p.id === toId)!;
       if (Math.hypot(from.x - to.x, from.y - to.y) < 1)
         throw new Error("Pass has no meaningful distance");
+      action = { ...action, durationMs: passDuration(current, fromId, toId) };
       if (passLane(current, fromId, toId).blocked)
         throw new Error("Pass crosses a blocked lane");
       meaningful = true;
@@ -379,75 +375,250 @@ export function validateSequence(value: unknown, board: Board): Sequence {
   };
   return seq;
 }
-/** Sampling is pure: a paused clock freezes both the players AND a ball mid-pass. */
+/** Illustrative reaction model, not a match prediction. Times are simulated, never wall-clock. */
+export const REACTION_STEP_MS = 50;
+const REACTION_DELAY_MS = 180;
+const PRESS_RANGE = 24;
+const PRESS_SPEED = 3.8;
+const SUPPORT_SPEED = 2.2;
+const BLOCK_SPEED = 0.85;
+const BALL_SPEED = 32;
+type SimulationFrame = {
+  time: number;
+  board: Board;
+  ball: Position;
+  pressingIds: string[];
+};
+const mix = (a: Position, b: Position, t: number): Position => ({
+  x: a.x + (b.x - a.x) * t,
+  y: a.y + (b.y - a.y) * t,
+});
+function toward(from: Position, target: Position, maximum: number): Position {
+  const length = distance(from, target);
+  return mix(from, target, length ? Math.min(1, maximum / length) : 0);
+}
+function actionBall(base: Board, action: Action, time: number): Position {
+  const owner = base.players.find((p) => p.id === base.possession)!;
+  const t = Math.max(0, Math.min(1, time / action.durationMs));
+  if (action.type === "pass")
+    return mix(
+      owner,
+      base.players.find((p) => p.id === action.toId)!,
+      t,
+    );
+  if (action.type === "move" && action.playerId === owner.id)
+    return mix(
+      owner,
+      { x: action.targetX, y: action.targetY },
+      t * t * (3 - 2 * t),
+    );
+  return owner;
+}
+export function passDuration(
+  board: Board,
+  fromId: string,
+  toId: string,
+): number {
+  const from = board.players.find((p) => p.id === fromId)!,
+    to = board.players.find((p) => p.id === toId)!;
+  return Math.max(
+    1000,
+    Math.min(2400, Math.ceil((distance(from, to) / BALL_SPEED) * 20) * 50),
+  );
+}
+/** Exact relative segment check between ticks prevents a fast ball tunnelling past a defender. */
+export function sweptBallDistance(
+  ballBefore: Position,
+  ballAfter: Position,
+  defenderBefore: Position,
+  defenderAfter: Position,
+) {
+  return laneDistance(
+    { x: 0, y: 0 },
+    { x: ballBefore.x - defenderBefore.x, y: ballBefore.y - defenderBefore.y },
+    { x: ballAfter.x - defenderAfter.x, y: ballAfter.y - defenderAfter.y },
+  );
+}
+export function simulateAction(
+  base: Board,
+  action: Action,
+): { frames: SimulationFrame[]; interceptorIds: string[] } {
+  const owner = base.players.find((p) => p.id === base.possession)!;
+  // A separately scripted opposition response is an explicit move, not another automatic press.
+  const reactive = !(
+    action.type === "move" &&
+    base.players.find((p) => p.id === action.playerId)!.team !== owner.team
+  );
+  const starts = new Map(base.players.map((p) => [p.id, p]));
+  const frames: SimulationFrame[] = [
+    { time: 0, board: base, ball: owner, pressingIds: [] },
+  ];
+  const interceptors = new Set<string>();
+  for (
+    let time = Math.min(REACTION_STEP_MS, action.durationMs);
+    ;
+    time = Math.min(time + REACTION_STEP_MS, action.durationMs)
+  ) {
+    const previous = frames.at(-1)!;
+    const dt = (time - previous.time) / 1000;
+    const ball = actionBall(base, action, time);
+    const perceived = actionBall(
+      base,
+      action,
+      Math.max(0, time - REACTION_DELAY_MS),
+    );
+    const near = reactive
+      ? previous.board.players
+          .filter(
+            (p) =>
+              p.team !== owner.team &&
+              p.role !== "GK" &&
+              distance(p, perceived) < PRESS_RANGE,
+          )
+          .sort((a, b) => distance(a, perceived) - distance(b, perceived))
+          .slice(0, 2)
+      : [];
+    const pressingIds = near.map((p) => p.id);
+    let changed = false;
+    const players = previous.board.players.map((p) => {
+      const start = starts.get(p.id)!;
+      if (action.type === "move" && action.playerId === p.id) {
+        const t = time / action.durationMs;
+        return {
+          ...p,
+          ...mix(
+            start,
+            { x: action.targetX, y: action.targetY },
+            t * t * (3 - 2 * t),
+          ),
+        };
+      }
+      if (!reactive || p.team === owner.team || p.role === "GK") return p;
+      const rank = pressingIds.indexOf(p.id);
+      const target =
+        rank >= 0
+          ? perceived
+          : {
+              x:
+                start.x +
+                Math.max(-1.4, Math.min(1.4, (perceived.x - start.x) * 0.035)),
+              y:
+                start.y +
+                Math.max(-3, Math.min(3, (perceived.y - start.y) * 0.1)),
+            };
+      const speed =
+        rank === 0 ? PRESS_SPEED : rank === 1 ? SUPPORT_SPEED : BLOCK_SPEED;
+      const amount =
+        rank >= 0
+          ? Math.min(speed * dt, Math.max(0, distance(p, target) - 2.8))
+          : speed * dt;
+      // Cap the action's displacement so a short explanation preserves the team's broad shape.
+      const next = toward(start, toward(p, target, amount), 6);
+      const position = { x: clamp(next.x), y: clamp(next.y) };
+      changed ||= distance(p, position) > 0.00001;
+      return { ...p, ...position };
+    });
+    const defendingTeam = owner.team === "tottenham" ? "arsenal" : "tottenham";
+    const board: Board = {
+      ...previous.board,
+      players,
+      possession:
+        action.type === "pass" && time === action.durationMs
+          ? action.toId
+          : base.possession,
+      custom: {
+        ...previous.board.custom,
+        ...(action.type === "move"
+          ? { [starts.get(action.playerId)!.team]: true }
+          : {}),
+        ...(changed ? { [defendingTeam]: true } : {}),
+      },
+    };
+    if (action.type === "pass")
+      for (const p of players) {
+        if (
+          p.team !== owner.team &&
+          sweptBallDistance(
+            previous.ball,
+            ball,
+            previous.board.players.find((q) => q.id === p.id)!,
+            p,
+          ) < PASS_LANE_CLEARANCE
+        )
+          interceptors.add(p.id);
+      }
+    frames.push({ time, board, ball, pressingIds });
+    if (time === action.durationMs) break;
+  }
+  return { frames, interceptorIds: [...interceptors] };
+}
+export function compileSequence(base: Board, actions: Action[]) {
+  let board = base,
+    start = 0;
+  const steps = actions.map((action) => {
+    const simulation = simulateAction(board, action);
+    const step = { action, start, frames: simulation.frames };
+    board = simulation.frames.at(-1)!.board;
+    start += action.durationMs;
+    return step;
+  });
+  return { base, steps, finalBoard: board, duration: start };
+}
+export function sampleTimeline(
+  timeline: ReturnType<typeof compileSequence>,
+  elapsed: number,
+) {
+  const time = Math.max(0, elapsed);
+  const index = timeline.steps.findIndex(
+    (s) => time < s.start + s.action.durationMs,
+  );
+  if (index < 0)
+    return {
+      board: timeline.finalBoard,
+      ball: timeline.finalBoard.players.find(
+        (p) => p.id === timeline.finalBoard.possession,
+      )!,
+      index: timeline.steps.length,
+      caption: timeline.steps.at(-1)?.action.caption ?? "",
+      activeIds: [] as string[],
+      pressingIds: [] as string[],
+    };
+  const step = timeline.steps[index],
+    local = time - step.start;
+  const frameIndex = Math.min(
+    Math.floor(local / REACTION_STEP_MS),
+    step.frames.length - 2,
+  );
+  const a = step.frames[frameIndex],
+    b = step.frames[frameIndex + 1];
+  const t = (local - a.time) / (b.time - a.time);
+  const board = {
+    ...a.board,
+    players: a.board.players.map((p, i) => ({
+      ...p,
+      ...mix(p, b.board.players[i], t),
+    })),
+  };
+  const action = step.action;
+  return {
+    board,
+    ball: mix(a.ball, b.ball, t),
+    index,
+    caption: action.caption,
+    activeIds:
+      action.type === "highlight"
+        ? action.playerIds
+        : [action.type === "move" ? action.playerId : action.toId],
+    pressingIds: t > 0 ? b.pressingIds : a.pressingIds,
+  };
+}
+/** Pure sampling: scrubbing and replay always rebuild exactly the same defending positions. */
 export function sampleSequence(
   base: Board,
   actions: Action[],
   elapsed: number,
-): {
-  board: Board;
-  ball: Position;
-  index: number;
-  caption: string;
-  activeIds: string[];
-} {
-  let board = base,
-    remaining = Math.max(0, elapsed),
-    index = 0;
-  for (const action of actions) {
-    if (remaining >= action.durationMs) {
-      board = applyAction(board, action);
-      remaining -= action.durationMs;
-      index++;
-      continue;
-    }
-    const progress = remaining / action.durationMs;
-    const t = progress * progress * (3 - 2 * progress);
-    const owner = board.players.find((p) => p.id === board.possession)!;
-    let ball: Position = owner;
-    if (action.type === "move") {
-      const p = board.players.find((p) => p.id === action.playerId)!;
-      board = {
-        ...board,
-        players: board.players.map((q) =>
-          q.id === p.id
-            ? {
-                ...q,
-                x: p.x + (action.targetX - p.x) * t,
-                y: p.y + (action.targetY - p.y) * t,
-              }
-            : q,
-        ),
-      };
-      ball = board.players.find((p) => p.id === board.possession)!;
-    } else if (action.type === "pass") {
-      const from = board.players.find((p) => p.id === action.fromId)!,
-        to = board.players.find((p) => p.id === action.toId)!;
-      ball = {
-        x: from.x + (to.x - from.x) * t,
-        y: from.y + (to.y - from.y) * t,
-      };
-    }
-    return {
-      board,
-      ball,
-      index,
-      caption: action.caption,
-      activeIds:
-        action.type === "highlight"
-          ? action.playerIds
-          : action.type === "move"
-            ? [action.playerId]
-            : [action.toId],
-    };
-  }
-  return {
-    board,
-    ball: board.players.find((p) => p.id === board.possession)!,
-    index,
-    caption: actions.at(-1)?.caption ?? "",
-    activeIds: [],
-  };
+) {
+  return sampleTimeline(compileSequence(base, actions), elapsed);
 }
 export type History = {
   board: Board;
@@ -516,7 +687,7 @@ export function laneDistance(p: Position, a: Position, b: Position) {
   return distance(p, { x: a.x + t * dx, y: a.y + t * (b.y - a.y) });
 }
 /** Shared by overlays, sequence validation and routing. Includes pressure at both endpoints. */
-export function passLane(board: Board, fromId: string, toId: string) {
+export function staticPassLane(board: Board, fromId: string, toId: string) {
   const from = board.players.find((p) => p.id === fromId),
     to = board.players.find((p) => p.id === toId);
   if (
@@ -536,7 +707,35 @@ export function passLane(board: Board, fromId: string, toId: string) {
   return { blocked: blockerIds.length > 0, blockerIds };
 }
 
-/** Fewest-pass open route to an intended receiver, bounded by the remaining action budget. */
+/** Same conservative forecast for overlays, routing and validation. */
+export function passLane(board: Board, fromId: string, toId: string) {
+  const lane = staticPassLane(board, fromId, toId);
+  if (lane.blocked) return { ...lane, reason: "lane" as const };
+  const from = board.players.find((p) => p.id === fromId)!,
+    to = board.players.find((p) => p.id === toId)!;
+  if (distance(from, to) > BALL_SPEED * 2.4)
+    return {
+      blocked: true,
+      blockerIds: [] as string[],
+      reason: "distance" as const,
+    };
+  const simulation = simulateAction(
+    { ...board, possession: fromId },
+    {
+      type: "pass",
+      fromId,
+      toId,
+      durationMs: passDuration(board, fromId, toId),
+      caption: "Pass forecast",
+    },
+  );
+  return {
+    blocked: simulation.interceptorIds.length > 0,
+    blockerIds: simulation.interceptorIds,
+    reason: "reaction" as const,
+  };
+}
+/** Bounded stateful search: reaching the same teammate after circulation can draw a different press. */
 export function findPassingRoute(
   board: Board,
   toId: string,
@@ -546,25 +745,40 @@ export function findPassingRoute(
     target = board.players.find((p) => p.id === toId);
   if (!owner || !target || owner.team !== target.team) return null;
   if (owner.id === toId) return [];
-  const teammates = board.players
-    .filter((p) => p.team === owner.team)
-    .sort((a, b) => distance(a, target) - distance(b, target));
-  const queue: string[][] = [[owner.id]],
-    visited = new Set([owner.id]);
-  for (let i = 0; i < queue.length; i++) {
-    const path = queue[i];
-    if (path.length > Math.min(4, maxPasses)) continue;
-    for (const next of teammates) {
-      if (
-        visited.has(next.id) ||
-        passLane(board, path.at(-1)!, next.id).blocked
-      )
-        continue;
-      const route = [...path, next.id];
-      if (next.id === toId) return route.slice(1);
-      visited.add(next.id);
-      queue.push(route);
+  const teammates = board.players.filter((p) => p.team === owner.team);
+  let frontier = [{ board, path: [] as string[], length: 0 }];
+  for (let depth = 0; depth < Math.min(4, maxPasses); depth++) {
+    const next: typeof frontier = [];
+    for (const state of frontier) {
+      const fromId = state.board.possession;
+      const from = state.board.players.find((p) => p.id === fromId)!;
+      for (const receiver of [...teammates].sort(
+        (a, b) => distance(a, target) - distance(b, target),
+      )) {
+        if (
+          receiver.id === fromId ||
+          passLane(state.board, fromId, receiver.id).blocked
+        )
+          continue;
+        const path = [...state.path, receiver.id];
+        if (receiver.id === toId) return path;
+        const advanced = applyAction(state.board, {
+          type: "pass",
+          fromId,
+          toId: receiver.id,
+          durationMs: passDuration(state.board, fromId, receiver.id),
+          caption: "Recycle to draw pressure",
+        });
+        next.push({
+          board: advanced,
+          path,
+          length: state.length + distance(from, receiver),
+        });
+      }
     }
+    // Keep the search small and favor short supporting routes, not repeated full-pitch switches.
+    frontier = next.sort((a, b) => a.length - b.length).slice(0, 24);
+    if (!frontier.length) break;
   }
   return null;
 }

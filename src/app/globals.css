@@ -1231,3 +1231,12 @@ select option {
     scroll-behavior: auto !important;
   }
 }
+
+.player.arsenal.pressing-player {
+  outline: 2px solid #e6a478;
+  outline-offset: 3px;
+}
+.player.tottenham.pressing-player {
+  outline: 2px solid #d5e7c5;
+  outline-offset: 3px;
+}

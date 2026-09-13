@@ -7,6 +7,7 @@ import {
   passingOptions,
   passLane,
   type Board,
+  type Action,
   type Team,
   type MoveAction,
   type Sequence,
@@ -23,6 +24,9 @@ type Props = {
   overlay: Overlay;
   ghosts: MoveAction[];
   activeIds: string[];
+  pressingIds: string[];
+  activePass: Extract<Action, { type: "pass" }> | null;
+  previewLabel: string;
   response: Sequence["opponent"] | null;
   onSelect: (id: string) => void;
   onBegin: () => void;
@@ -40,6 +44,9 @@ export default function Pitch({
   overlay,
   ghosts,
   activeIds,
+  pressingIds,
+  activePass,
+  previewLabel,
   response,
   onSelect,
   onBegin,
@@ -63,7 +70,8 @@ export default function Pitch({
     (p) => p.id === (selected || board.possession),
   )!;
   const owner = board.players.find((p) => p.id === board.possession)!;
-  const options = overlay === "passing" ? passingOptions(board) : [];
+  const options =
+    overlay === "passing" && !activePass ? passingOptions(board) : [];
   function finish() {
     if (drag.current) {
       onEnd();
@@ -138,6 +146,23 @@ export default function Pitch({
               strokeWidth="1.5"
             />
           ))}
+        {overlay === "passing" &&
+          activePass &&
+          (() => {
+            const receiver = board.players.find(
+              (p) => p.id === activePass.toId,
+            )!;
+            return (
+              <path
+                data-pass-in-flight={activePass.toId}
+                d={`M${ball.x * 10} ${ball.y * 6.2}L${receiver.x * 10} ${receiver.y * 6.2}`}
+                stroke="#c3ee85"
+                strokeWidth="2.5"
+                strokeDasharray="5 7"
+                markerEnd="url(#arrow)"
+              />
+            );
+          })()}
         {options.map(({ player, blocked }) => (
           <path
             key={player.id}
@@ -247,8 +272,9 @@ export default function Pitch({
         <motion.button
           key={p.id}
           type="button"
-          className={`player ${p.team} ${selected === p.id ? "selected" : ""} ${activeIds.includes(p.id) ? "active-player" : ""} ${dragging === p.id ? "dragging" : ""}`}
+          className={`player ${p.team} ${selected === p.id ? "selected" : ""} ${activeIds.includes(p.id) ? "active-player" : ""} ${dragging === p.id ? "dragging" : ""} ${pressingIds.includes(p.id) ? "pressing-player" : ""}`}
           data-player-id={p.id}
+          data-pressing={pressingIds.includes(p.id)}
           data-x={p.x.toFixed(2)}
           data-y={p.y.toFixed(2)}
           aria-label={`${p.team === "tottenham" ? "Tottenham" : "Arsenal"} ${p.role}`}
@@ -338,7 +364,11 @@ export default function Pitch({
       ))}
       <motion.div
         className="ball"
-        aria-label={`Ball with ${owner.team === "tottenham" ? "Tottenham" : "Arsenal"} ${owner.role}`}
+        aria-label={
+          activePass
+            ? `Ball travelling to ${board.players.find((p) => p.id === activePass.toId)!.role}`
+            : `Ball with ${owner.team === "tottenham" ? "Tottenham" : "Arsenal"} ${owner.role}`
+        }
         data-possession={board.possession}
         data-x={ball.x.toFixed(2)}
         data-y={ball.y.toFixed(2)}
@@ -351,7 +381,12 @@ export default function Pitch({
       <span className="attack-label" aria-hidden="true">
         TOTTENHAM →
       </span>
-      {locked && <span className="preview-badge">Sequence preview</span>}
+      {locked && (
+        <span className="preview-badge">
+          {previewLabel}
+          {pressingIds.length > 0 ? " · pressure closing" : ""}
+        </span>
+      )}
     </div>
   );
 }
