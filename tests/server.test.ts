@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { analyzeBoard } from "../src/lib/openai";
 import { curatedAnalysis } from "../src/lib/curated";
-import { createBoard, type LabRequest } from "../src/lib/lab";
+import { createBoard, validateSequence, type LabRequest } from "../src/lib/lab";
 const input: LabRequest = {
   scenario: "press",
   question: "How do we beat this press?",
@@ -169,6 +169,30 @@ test("live output cannot bypass a moving defender by requesting an unrealistical
     const result = await analyzeBoard({ ...input, board });
     assert.equal(result.source, "fallback");
     assert.ok(result.analysis);
+  } finally {
+    restore();
+  }
+});
+
+test("live output falls back when a defender can anticipate the pass instead of following the ball", async () => {
+  process.env.OPENAI_API_KEY = "test-placeholder-not-a-real-key";
+  const board = {
+    ...input.board,
+    players: input.board.players.map((p) =>
+      p.id === "lcb" ? { ...p, x: 60, y: 50 } :
+      p.id === "ars-st" ? { ...p, x: 45, y: 66 } :
+      p.team === "arsenal" ? { ...p, x: 96, y: 96 } : p,
+    ),
+  };
+  globalThis.fetch = async () => mockResponse({
+    ...fixture,
+    actions: [{ type: "pass", fromId: "gk", toId: "lcb", durationMs: 1650, caption: "Unsafe diagonal." }],
+  });
+  try {
+    const result = await analyzeBoard({ ...input, board });
+    assert.equal(result.source, "fallback");
+    assert.ok(result.analysis);
+    assert.deepEqual(validateSequence(result.analysis, board), result.analysis);
   } finally {
     restore();
   }

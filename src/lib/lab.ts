@@ -383,6 +383,10 @@ const PRESS_SPEED = 3.8;
 const SUPPORT_SPEED = 2.2;
 const BLOCK_SPEED = 0.85;
 const BALL_SPEED = 32;
+// Closing a passing lane is a different action from jogging with the team's shape.
+// Never assume a defender keeps following the ball when they could cut it out.
+const INTERCEPT_SPEED = 6;
+const FIRST_TOUCH_MS = 200;
 type SimulationFrame = {
   time: number;
   board: Board;
@@ -439,6 +443,46 @@ export function sweptBallDistance(
     { x: ballAfter.x - defenderAfter.x, y: ballAfter.y - defenderAfter.y },
   );
 }
+/**
+ * Conservative time-to-intercept envelope for every defender, independent of
+ * the two displayed pressers and their shape-preserving movement caps.
+ * After reacting, a defender can run directly to any future point on the pass.
+ * Distance to a linear ball path minus growing reach is convex, so minimizing
+ * it continuously catches crossings even between simulation frames.
+ */
+export function reachableInterceptors(
+  base: Board,
+  action: Extract<Action, { type: "pass" }>,
+): string[] {
+  const from = base.players.find((p) => p.id === action.fromId)!,
+    to = base.players.find((p) => p.id === action.toId)!;
+  const duration = action.durationMs / 1000;
+  const delay = REACTION_DELAY_MS / 1000;
+  return base.players
+    .filter((p) => {
+      if (p.team === from.team) return false;
+      const margin = (time: number) =>
+        distance(p, mix(from, to, Math.min(1, time / duration))) -
+        PASS_LANE_CLEARANCE -
+        INTERCEPT_SPEED * Math.max(0, time - delay);
+      // Before the reaction delay, the defender can still stick out a foot.
+      if (laneDistance(p, from, mix(from, to, Math.min(1, delay / duration))) <= PASS_LANE_CLEARANCE)
+        return true;
+      let low = Math.min(delay, duration), high = duration;
+      for (let i = 0; i < 36; i++) {
+        const a = low + (high - low) / 3,
+          b = high - (high - low) / 3;
+        if (margin(a) < margin(b)) high = b;
+        else low = a;
+      }
+      return (
+        margin((low + high) / 2) <= 0 ||
+        // Receiving is not an instantaneous possession escape from a marker.
+        margin(duration + FIRST_TOUCH_MS / 1000) <= 0
+      );
+    })
+    .map((p) => p.id);
+}
 export function simulateAction(
   base: Board,
   action: Action,
@@ -453,7 +497,9 @@ export function simulateAction(
   const frames: SimulationFrame[] = [
     { time: 0, board: base, ball: owner, pressingIds: [] },
   ];
-  const interceptors = new Set<string>();
+  const interceptors = new Set<string>(
+    action.type === "pass" ? reachableInterceptors(base, action) : [],
+  );
   for (
     let time = Math.min(REACTION_STEP_MS, action.durationMs);
     ;

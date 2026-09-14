@@ -26,6 +26,7 @@ import {
   totalDuration,
   validateSequence,
   type History,
+  type Action,
 } from "../src/lib/lab";
 import { curatedAnalysis, explorations } from "../src/lib/curated";
 for (const scenario of ["press", "block", "lead"] as const) {
@@ -69,7 +70,8 @@ test("canonical press sequence drops DM and counter creates midfield space", () 
     counter = applyActions(end, s.opponent.movements);
   assert.equal(end.players.find((p) => p.id === "dm")!.x, 25);
   assert.equal(end.players.find((p) => p.id === "dm")!.y, 50);
-  assert.equal(end.possession, "rcb");
+  assert.equal(end.possession, "dm");
+  assert.equal(passLane(end, "dm", "rcb").blocked, true);
   assert.equal(counter.players.find((p) => p.id === "ars-dm")!.x, 34);
   assert.equal(s.opponent.space.x, 62);
   assert.equal(s.opponent.outletPlayerId, "lcm");
@@ -344,10 +346,14 @@ test("routing finds an open supporting pass and honors the remaining pass budget
   const path = findPassingRoute(board, "lcb", 2)!;
   assert.equal(path.length, 2);
   assert.equal(path.at(-1), "lcb");
-  let owner = board.possession;
+  let current = board;
   for (const id of path) {
-    assert.equal(passLane(board, owner, id).blocked, false);
-    owner = id;
+    const owner = current.possession;
+    assert.equal(passLane(current, owner, id).blocked, false);
+    current = applyAction(current, {
+      type: "pass", fromId: owner, toId: id,
+      durationMs: passDuration(current, owner, id), caption: "Use the open support.",
+    });
   }
 });
 
@@ -492,7 +498,7 @@ test("an initially clear pass is rejected when a defender reaches it during flig
   );
 });
 
-test("circulation can draw a presser away and reopen a lane; routing can revisit a player", () => {
+test("circulation cannot claim a lane is open just because a presser chases the previous ball", () => {
   const base = createBoard("press");
   let board = {
     ...base,
@@ -506,22 +512,15 @@ test("circulation can draw a presser away and reopen a lane; routing can revisit
   board = movePlayer(board, "ars-lw", { x: 25, y: 65 });
   assert.equal(passLane(board, "gk", "lcb").blocked, true);
   assert.equal(findPassingRoute(board, "lcb", 2), null);
-  assert.deepEqual(findPassingRoute(board, "lcb", 3), ["dm", "gk", "lcb"]);
-  let current = board;
-  for (const toId of ["dm", "gk"]) {
-    const fromId = current.possession;
-    assert.equal(passLane(current, fromId, toId).blocked, false);
-    current = applyAction(current, {
-      type: "pass",
-      fromId,
-      toId,
-      durationMs: passDuration(current, fromId, toId),
-      caption: "Invite pressure, return the ball.",
-    });
-  }
-  assert.equal(current.possession, "gk");
-  assert.ok(current.players.find((p) => p.id === "ars-st")!.y > 55.5);
-  assert.equal(passLane(current, "gk", "lcb").blocked, false);
+  // The previous model accepted DM → GK → LCB by assuming the defender
+  // continued a slow pursuit. The defender can instead attack the next lane.
+  assert.equal(findPassingRoute(board, "lcb", 3), null);
+  const returnPass: Action = {
+    type: "pass", fromId: "gk", toId: "dm", durationMs: 1000,
+    caption: "Invite pressure.",
+  };
+  const afterFirst = applyAction(board, returnPass);
+  assert.equal(passLane(afterFirst, "dm", "gk").blocked, true);
 });
 
 test("scrub, replay and application share defensive frames; undo restores both teams", () => {
@@ -574,7 +573,7 @@ test("pass timing is distance-based and cannot be shortened by model output", ()
   assert.ok(passDuration(board, "gk", "st") > passDuration(board, "gk", "lcb"));
 });
 
-test("all three default demos retain passing combinations against a moving defense", () => {
+test("default demos retain safe passes and omit combinations the defense can cut out", () => {
   for (const scenario of ["press", "block", "lead"] as const) {
     const board = createBoard(scenario);
     const result = curatedAnalysis({
@@ -583,18 +582,20 @@ test("all three default demos retain passing combinations against a moving defen
       question: "create a free player",
     });
     assert.ok(
-      result.analysis!.actions.filter((a) => a.type === "pass").length >= 2,
+      result.analysis!.actions.filter((a) => a.type === "pass").length >= 1,
     );
     const final = applyActions(board, result.analysis!.actions);
     assert.notDeepEqual(
       final.players.filter((p) => p.team === "arsenal"),
       board.players.filter((p) => p.team === "arsenal"),
     );
-    if (scenario === "block")
+    if (scenario === "block") {
       assert.equal(
         result.analysis!.actions[0].type,
         "pass",
         "Release the pressured carrier before waiting for the winger's run",
       );
+      assert.ok(result.notice?.includes("no open route"));
+    }
   }
 });

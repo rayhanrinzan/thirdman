@@ -327,7 +327,7 @@ export default function Sandbox() {
   }
   const overlayHint =
     overlay === "passing"
-      ? "Nearest four teammates · green: open in this reaction model · amber: blocked or defender can reach the pass"
+      ? "Nearest four teammates · green: clears interception checks · amber: defender can cut out the pass or challenge the first touch"
       : overlay === "shape"
         ? "Outfield team shapes · illustrative geometry"
         : overlay === "pressure"

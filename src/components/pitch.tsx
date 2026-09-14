@@ -364,7 +364,7 @@ export default function Pitch({
       ))}
       <motion.div
         key={direct ? "preview-ball" : "edit-ball"}
-        className="ball"
+        className={`ball${activePass ? " in-flight" : ""}`}
         aria-label={
           activePass
             ? `Ball travelling to ${board.players.find((p) => p.id === activePass.toId)!.role}`

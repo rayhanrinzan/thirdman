@@ -48,7 +48,7 @@ test("complete press story: reversible playback, apply, response, compare, undo 
     page.getByRole("button", { name: "Replay sequence", exact: true }),
   ).toBeVisible({ timeout: 10000 });
   await expect(dm(page)).toHaveAttribute("data-x", "25.00");
-  await expect(page.locator(".ball")).toHaveAttribute("data-possession", "rcb");
+  await expect(page.locator(".ball")).toHaveAttribute("data-possession", adjusted.possession);
   await page
     .getByRole("button", { name: "Cancel preview", exact: true })
     .first()
@@ -493,4 +493,25 @@ test("an immediate preview after changing scenario starts at the actual board po
     });
   });
   expect(Math.max(...offsets)).toBeLessThan(2);
+});
+
+test("the visible travelling ball follows the exact path used for interception checks", async ({ page }) => {
+  await page.goto("/");
+  await explore(page);
+  const slider = page.getByRole("slider", { name: "Sequence progress" });
+  await page.getByRole("combobox", { name: "Tactical overlay", exact: true }).selectOption("passing");
+  for (const time of [1600, 1900, 2200]) {
+    await slider.fill(String(time));
+    await expect(page.locator(".ball.in-flight")).toBeVisible();
+    await expect.poll(async () => page.locator(".pitch").evaluate((pitch) => {
+      const ball = pitch.querySelector<HTMLElement>(".ball")!;
+      const bounds = pitch.getBoundingClientRect(), r = ball.getBoundingClientRect();
+      return Math.hypot(
+        r.x + r.width / 2 - (bounds.x + Number(ball.dataset.x) / 100 * bounds.width),
+        r.y + r.height / 2 - (bounds.y + Number(ball.dataset.y) / 100 * bounds.height),
+      );
+    })).toBeLessThan(2);
+  }
+  await slider.fill("0");
+  await expect(page.locator(".ball.in-flight")).toHaveCount(0);
 });

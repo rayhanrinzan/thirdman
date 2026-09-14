@@ -19,3 +19,9 @@ Main sequences now use a deterministic 50 ms defensive model: the nearest two ou
 Playback is compiled once per preview. Pause, scrub, apply and undo retain the same defensive positions. Pressers are highlighted, and the passing overlay shows the current in-flight pass rather than projecting new options from a player who has already released the ball. Validation so far: lint, TypeScript, 42 engine/server tests and production build pass; full desktop/mobile acceptance is next.
 
 Reactive opposition validation is complete: all 42 engine/server tests and 20 desktop/mobile browser tests pass, along with lint, TypeScript and the production build. Browser checks cover changing defensive positions, pause/scrub/replay determinism, both-team undo, in-flight overlays, and immediate previews after scenario changes. Visual inspection covered desktop, phone, the low-block release-before-run sequence, and drawing the press. Entering a preview now cancels residual formation animations so visible coordinates agree with the interception model from the first frame. README and in-app help explain the new behavior.
+
+## Anticipated interception fix — checkpoint
+
+Reproduced a diagonal accepted by the slow ball-following model even though a defender can run directly into its path. Added a continuous reach envelope for every opponent, including non-pressers and goalkeepers, plus a first-touch safety window. The same check is used by routing, overlays, server/client validation and simulation. Unsafe legacy demo connections are omitted rather than forced. Also fixed a separate visual mismatch: the in-flight ball no longer keeps the decorative possession offset, and now renders on the checked path.
+
+Validation so far: all 48 engine/server tests, lint and production build (including TypeScript) pass. Added independent millisecond sweep checks and a mocked live-response regression. Desktop/mobile browser checks are running before push/deployment.
