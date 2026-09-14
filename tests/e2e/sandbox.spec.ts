@@ -466,3 +466,31 @@ test("defenders react during playback and remain deterministic through pause, sc
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   expect(await opposition()).toEqual(original);
 });
+
+test("an immediate preview after changing scenario starts at the actual board positions", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("combobox", { name: "Scenario", exact: true })
+    .selectOption("block");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page
+    .getByRole("heading", { name: "Connect through the half-space" })
+    .waitFor();
+  const offsets = await page.locator(".pitch").evaluate((pitch) => {
+    const bounds = pitch.getBoundingClientRect();
+    return [...pitch.querySelectorAll<HTMLElement>(".player")].map((player) => {
+      const r = player.getBoundingClientRect();
+      return Math.hypot(
+        r.x +
+          r.width / 2 -
+          (bounds.x + (Number(player.dataset.x) / 100) * bounds.width),
+        r.y +
+          r.height / 2 -
+          (bounds.y + (Number(player.dataset.y) / 100) * bounds.height),
+      );
+    });
+  });
+  expect(Math.max(...offsets)).toBeLessThan(2);
+});

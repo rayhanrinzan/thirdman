@@ -954,8 +954,9 @@ export default function Sandbox() {
                 movements before changing your board.
               </li>
               <li>
-                <strong>Play.</strong> Watch the ball and players connect.
-                Pause, replay, or step through the sequence.
+                <strong>Play.</strong> Watch Arsenal press and shift as the
+                ball travels. Outlined defenders are closing down. Pause,
+                replay, or step through the same positions.
               </li>
               <li>
                 <strong>Respond.</strong> Explore a possible Arsenal response

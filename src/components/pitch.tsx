@@ -270,7 +270,7 @@ export default function Pitch({
       </svg>
       {board.players.map((p) => (
         <motion.button
-          key={p.id}
+          key={`${p.id}-${direct ? "preview" : "edit"}`}
           type="button"
           className={`player ${p.team} ${selected === p.id ? "selected" : ""} ${activeIds.includes(p.id) ? "active-player" : ""} ${dragging === p.id ? "dragging" : ""} ${pressingIds.includes(p.id) ? "pressing-player" : ""}`}
           data-player-id={p.id}
@@ -363,6 +363,7 @@ export default function Pitch({
         </motion.button>
       ))}
       <motion.div
+        key={direct ? "preview-ball" : "edit-ball"}
         className="ball"
         aria-label={
           activePass

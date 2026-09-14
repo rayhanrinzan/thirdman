@@ -6,10 +6,12 @@
 
 1. Open **Beat the press**. Tottenham has the ball with the goalkeeper.
 2. Click **Explore** with “How can we create a free player?” The original board stays intact; ghosts preview the movement.
-3. Click **Play sequence**. The DM drops between the center backs and the ball circulates GK → LCB → DM → RCB. Pause, scrub, replay, or use the step controls.
+3. Click **Play sequence**. The DM drops between the center backs and the ball circulates GK → LCB → DM → RCB while Arsenal closes down and shifts toward the ball. Pause, scrub, replay, or use the step controls.
 4. Click **Apply final shape**, then **Explore Arsenal’s response**. One possible midfielder jump leaves highlighted space and a possible next passing route.
 5. Use **Original / Tottenham adjustment / Arsenal response** to compare stages. Apply the response separately, then return to editing. Undo reverses the response and Tottenham adjustment in separate steps.
 6. Try **Invert fullback**, **Overlap**, or **Double pivot**, or switch scenarios. **Reset** restores the complete current scenario and cancels requests and playback.
+
+Try **“Draw the press and switch play”** to invite pressure with a brief hold and look for a supporting route. The guide may release the ball before an off-ball run if waiting would trap the carrier.
 
 The whole demo works without an API key. Live analysis may choose a different valid sequence based on the actual board and question.
 
@@ -18,7 +20,7 @@ The whole demo works without an API key. Live analysis may choose a different va
 - Select **Tottenham** or **Arsenal** to edit that team. Drag a piece, or focus it and use arrow keys; Shift moves farther. Select a player to assign possession or inspect nearby pressure.
 - Both teams offer **4–3–3, 4–2–3–1, 3–2–5, and 4–4–2**. Stable identities survive formation changes; displayed roles update. Manual movements are labeled **Edited shape**.
 - Undo/redo includes player movement, possession, formations, applied sequences and opposition responses. A drag is one history entry; up to 40 entries are kept in memory.
-- One optional overlay is visible at a time: nearby passing options, team shape, or pressure around the selected player. Passing lanes use geometric proximity, not success probabilities. The pressure ring shows nearby opponents, not a simulated press.
+- One optional overlay is visible at a time: nearby passing options, team shape, or pressure around the selected player. Passing options forecast both the starting lane and moving defenders during the flight. Amber marks a blocked lane or a defender who can reach the pass in the reaction model. During a pass, the overlay shows its remaining route; new options appear on reception. The pressure ring shows proximity, while outlined defenders identify active pressers.
 - Preview and playback are separate from the editable board. **Cancel preview** discards an unapplied preview. After applying, **Return to editing** preserves the applied board; undo restores earlier states.
 - Reduced-motion mode offers a step-based sequence. On phones, contextual information stacks beneath the pitch and new sequences bring the board into view.
 
@@ -68,6 +70,16 @@ Positions are normalized: **x increases left → right; y increases top → bott
 Each sequence has concise analysis text, timed `move`, `pass`, and `highlight` actions, and a separate opponent response. Validation checks roster identity, team ownership, finite coordinates, coherent possession transfers, meaningful changes, bounded text, at most three Tottenham moves and four passes, and at most 18 seconds of main playback. The opponent stage contains one or two Arsenal moves. Every pass is checked against the same lane geometry as the passing overlay, using player positions after all preceding actions. Opponents within four pitch-length units of the straight passing segment (including its endpoints) block the pass. Invalid live sequences fall back to curated routes, which search for open supporting connections within the four-pass budget. If no route exists, the guide omits that connection and explains why. Opposition-response arrows are only shown for an open direct lane; the highlighted space can remain useful even when it cannot yet be reached. Finite model coordinates are clamped to the safe pitch boundary; malformed values are rejected.
 
 In the default press example, center backs are `(25, 33)` and `(25, 67)`. The DM drops from `(43, 50)` to their current midpoint `(25, 50)`. A possible Arsenal midfielder jump leaves its former midfield space visible. Heavily edited shapes receive conservative labels rather than an assumed numerical overload.
+
+### Reactive opposition and interception checks
+
+Main actions advance an illustrative defensive model at fixed 50 ms intervals. Up to two nearby outfield defenders approach the ball, with a 180 ms reaction delay. The remaining block shifts more slowly; goalkeepers hold position. Movement is speed-limited and capped per action to retain the broad shape. This represents a possible press, without real player attributes or match predictions.
+
+The same frames drive playback, final application and validation. Each pass must clear the initial lane and a swept ball-versus-defender check throughout its flight, including between simulation ticks. Pass duration is normalized from distance, with a one-second minimum and a 2.4-second cap; changing model-provided timing cannot bypass the check. Long unsupported direct passes require intermediate teammates.
+
+Route search advances the defensive state after each candidate pass. Its bounded search can revisit a ball carrier after a give-and-go draws the presser away, reopening a previously blocked lane. It keeps at most 24 candidates per depth and four total passes, so an unavailable route means none was found within those limits. Curated plans may release a pressured carrier before starting the off-ball movement. If a connection remains unavailable, the guide omits it and explains why.
+
+Compiled previews make pause, scrubbing and replay deterministic. Applying the sequence saves both teams' resulting positions in one undo step. The separate Arsenal-response stage adds the explicitly proposed tactical movement to the already-reacted defense. Reduced motion steps through these same states.
 
 ### AI and deterministic recovery
 
