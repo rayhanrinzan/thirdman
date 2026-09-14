@@ -318,7 +318,9 @@ test("API validates rosters, possession and request size; all no-key scenarios w
     expect(r.status()).toBe(200);
     const result = await r.json();
     expect(result.source).toBe("fallback");
-    expect(result.analysis.actions.length).toBeGreaterThan(1);
+    expect(result.analysis.actions.length).toBeGreaterThan(0);
+    if (result.analysis.actions.length === 1)
+      expect(result.notice).toContain("no open route");
   }
   const board = createBoard("press");
   expect(
@@ -548,4 +550,28 @@ test("an unsafe model dribble recovers with an off-ball run while the carrier st
   await page.getByRole("button", { name: "Apply final shape", exact: true }).click();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(page.locator('[data-player-id="lcm"]')).toHaveAttribute("data-x", "58.00");
+});
+
+test("a safe carry is slowed to a valid duration and the ball remains attached while scrubbing", async ({ page }) => {
+  const board = createBoard("press");
+  const fixture = curatedAnalysis({ scenario: "press", board, question: "free player" }).analysis!;
+  await page.route("**/api/analyze", (route) => route.fulfill({
+    json: { source: "openai", notice: null, analysis: { ...fixture,
+      actions: [{ type: "move", playerId: "gk", targetX: 14, targetY: 50,
+        durationMs: 400, caption: "Carry into the open space." }],
+    } },
+  }));
+  await page.goto("/");
+  await explore(page);
+  const slider = page.getByRole("slider", { name: "Sequence progress" });
+  await expect(slider).toHaveAttribute("max", "1800");
+  for (const [time, x] of [[0, "8.00"], [900, "11.00"], [1800, "14.00"]] as const) {
+    await slider.fill(String(time));
+    await expect(page.locator('[data-player-id="gk"]')).toHaveAttribute("data-x", x);
+    await expect(page.locator(".ball")).toHaveAttribute("data-x", x);
+    await expect(page.locator(".ball")).toHaveAttribute("data-possession", "gk");
+  }
+  await page.getByRole("button", { name: "Apply final shape", exact: true }).click();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.locator(".ball")).toHaveAttribute("data-x", "8.00");
 });

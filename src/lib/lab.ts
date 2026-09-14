@@ -608,6 +608,7 @@ export function simulateAction(
     time = Math.min(time + REACTION_STEP_MS, action.durationMs)
   ) {
     const previous = frames.at(-1)!;
+    const previousPlayers = new Map(previous.board.players.map((p) => [p.id, p]));
     const dt = (time - previous.time) / 1000;
     const ball = actionBall(base, action, time, movementPath);
     const perceived = actionBall(
@@ -669,11 +670,15 @@ export function simulateAction(
     const proposed = players;
     players = proposed.map((p) => {
       if (p.team === owner.team || !reactive || p.role === "GK") return p;
-      const before = previous.board.players.find((q) => q.id === p.id)!;
+      const before = previousPlayers.get(p.id)!;
+      const travel = distance(before, p);
+      if (travel < 1e-8) return p;
       const collides = proposed.some((q) => {
         if (q.team === p.team) return false;
-        const qBefore = previous.board.players.find((r) => r.id === q.id)!;
-        return sweptBallDistance(before, p, qBefore, q) < Math.min(MOVEMENT_CLEARANCE, distance(before, qBefore)) - 1e-7;
+        const qBefore = previousPlayers.get(q.id)!;
+        const gap = distance(before, qBefore);
+        if (gap > MOVEMENT_CLEARANCE + travel + distance(qBefore, q)) return false;
+        return sweptBallDistance(before, p, qBefore, q) < Math.min(MOVEMENT_CLEARANCE, gap) - 1e-7;
       });
       return collides ? before : p;
     });
@@ -700,17 +705,17 @@ export function simulateAction(
           sweptBallDistance(
             previous.ball,
             ball,
-            previous.board.players.find((q) => q.id === p.id)!,
+            previousPlayers.get(p.id)!,
             p,
           ) < PASS_LANE_CLEARANCE
         )
           interceptors.add(p.id);
       }
     if (action.type === "move") {
-      const before = previous.board.players.find((p) => p.id === action.playerId)!;
+      const before = previousPlayers.get(action.playerId)!;
       const after = players.find((p) => p.id === action.playerId)!;
       for (const opponent of players.filter((p) => p.team !== after.team)) {
-        const opponentBefore = previous.board.players.find((p) => p.id === opponent.id)!;
+        const opponentBefore = previousPlayers.get(opponent.id)!;
         const initialGap = distance(before, opponentBefore);
         if (sweptBallDistance(before, after, opponentBefore, opponent) < Math.min(MOVEMENT_CLEARANCE, initialGap) - 1e-7)
           movementBlocked = true;
@@ -898,16 +903,17 @@ export function passLane(board: Board, fromId: string, toId: string) {
       blockerIds: [] as string[],
       reason: "distance" as const,
     };
-  const simulation = simulateAction(
-    { ...board, possession: fromId },
-    {
+  const forecast: Extract<Action, { type: "pass" }> = {
       type: "pass",
       fromId,
       toId,
       durationMs: passDuration(board, fromId, toId),
       caption: "Pass forecast",
-    },
-  );
+  };
+  const reachable = reachableInterceptors(board, forecast);
+  if (reachable.length)
+    return { blocked: true, blockerIds: reachable, reason: "reaction" as const };
+  const simulation = simulateAction({ ...board, possession: fromId }, forecast);
   return {
     blocked: simulation.interceptorIds.length > 0,
     blockerIds: simulation.interceptorIds,
