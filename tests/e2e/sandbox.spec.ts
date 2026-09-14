@@ -339,7 +339,7 @@ test("API validates rosters, possession and request size; all no-key scenarios w
   ).toBe(413);
 });
 
-test("an opponent in an amber passing lane makes the sequence route around it", async ({
+test("an opponent in an amber passing lane cannot be bypassed by an unsafe supporting route", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -378,8 +378,8 @@ test("an opponent in an amber passing lane makes the sequence route around it", 
     }
     board = applyAction(board, action);
   }
-  expect(passes).toBeGreaterThan(0);
-  await expect(page.locator(".inline-notice")).toContainText("blocked");
+  expect(passes).toBe(0);
+  await expect(page.locator(".inline-notice")).toContainText("no open route");
   await page
     .getByRole("button", { name: "Apply final shape", exact: true })
     .click();
