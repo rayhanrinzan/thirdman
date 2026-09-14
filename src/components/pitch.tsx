@@ -22,7 +22,7 @@ type Props = {
   direct: boolean;
   selected: string | null;
   overlay: Overlay;
-  ghosts: MoveAction[];
+  ghosts: (MoveAction & { path: Position[] })[];
   activeIds: string[];
   pressingIds: string[];
   activePass: Extract<Action, { type: "pass" }> | null;
@@ -210,11 +210,11 @@ export default function Pitch({
           </g>
         )}
         {ghosts.map((a, i) => {
-          const p = board.players.find((p) => p.id === a.playerId)!;
           return (
             <g key={`${a.playerId}-${i}`}>
               <path
-                d={`M${p.x * 10} ${p.y * 6.2}L${a.targetX * 10} ${a.targetY * 6.2}`}
+                data-movement-route={a.playerId}
+                d={a.path.map((p, i) => `${i ? "L" : "M"}${p.x * 10} ${p.y * 6.2}`).join(" ")}
                 stroke="#c3ee85"
                 strokeWidth="2.5"
                 strokeDasharray="5 7"

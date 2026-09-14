@@ -8,6 +8,7 @@ import {
   type AnalysisResult,
 } from "../../src/lib/lab";
 import { scenarios } from "../../src/lib/tactics";
+import { curatedAnalysis } from "../../src/lib/curated";
 const dm = (page: import("@playwright/test").Page) =>
   page.locator('[data-player-id="dm"]');
 async function explore(page: import("@playwright/test").Page) {
@@ -514,4 +515,37 @@ test("the visible travelling ball follows the exact path used for interception c
   }
   await slider.fill("0");
   await expect(page.locator(".ball.in-flight")).toHaveCount(0);
+});
+
+test("an unsafe model dribble recovers with an off-ball run while the carrier stays put", async ({ page }) => {
+  const board = createBoard("lead");
+  const fixture = curatedAnalysis({ scenario: "lead", board, question: "protect our lead" }).analysis!;
+  await page.route("**/api/analyze", (route) => route.fulfill({
+    json: { source: "openai", notice: null, analysis: {
+      ...fixture,
+      actions: [{ type: "move", playerId: "rcm", targetX: 42, targetY: 62,
+        durationMs: 400, caption: "Unsafe carry through the midfielder." }],
+    } },
+  }));
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "Scenario", exact: true }).selectOption("lead");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("heading", { name: "Keep two players behind the ball" }).waitFor();
+  await expect(page.getByText("Curated exploration", { exact: true })).toBeVisible();
+  const route = await page.locator('[data-movement-route="lcm"]').getAttribute("d");
+  expect((route!.match(/L/g) || []).length).toBeGreaterThan(1);
+  const carrier = page.locator('[data-player-id="rcm"]');
+  const slider = page.getByRole("slider", { name: "Sequence progress" });
+  const duration = Number(await slider.getAttribute("max"));
+  for (const time of [0, duration / 2, duration]) {
+    await slider.fill(String(time));
+    await expect(carrier).toHaveAttribute("data-x", "60.00");
+    await expect(carrier).toHaveAttribute("data-y", "66.00");
+    await expect(page.locator(".ball")).toHaveAttribute("data-possession", "rcm");
+    await expect(page.locator(".ball")).toHaveAttribute("data-x", "60.00");
+  }
+  await expect(page.locator('[data-player-id="lcm"]')).toHaveAttribute("data-x", "42.00");
+  await page.getByRole("button", { name: "Apply final shape", exact: true }).click();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(page.locator('[data-player-id="lcm"]')).toHaveAttribute("data-x", "58.00");
 });

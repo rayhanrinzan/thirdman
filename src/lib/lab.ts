@@ -194,7 +194,7 @@ export const moveSchema = z
     playerId: short(30),
     targetX: z.number(),
     targetY: z.number(),
-    durationMs,
+    durationMs: z.number().int().min(400).max(6000),
     caption,
   })
   .strict();
@@ -324,6 +324,7 @@ export function validateSequence(value: unknown, board: Board): Sequence {
         targetX: clamp(action.targetX),
         targetY: clamp(action.targetY),
       };
+      action = prepareMove(current, action);
       const id = action.playerId;
       const p = current.players.find((p) => p.id === id)!;
       meaningful ||=
@@ -347,7 +348,10 @@ export function validateSequence(value: unknown, board: Board): Sequence {
         throw new Error("Pass crosses a blocked lane");
       meaningful = true;
     } else action.playerIds.forEach(player);
-    current = applyAction(current, action);
+    const simulation = simulateAction(current, action);
+    if (simulation.movementBlocked || simulation.tacklerIds.length)
+      throw new Error("Movement crosses an opponent or exposes the ball carrier to a tackle");
+    current = simulation.frames.at(-1)!.board;
     return action;
   });
   if (!meaningful || totalDuration(seq.actions) > 18000)
@@ -363,7 +367,10 @@ export function validateSequence(value: unknown, board: Board): Sequence {
     const p = current.players.find((p) => p.id === move.playerId)!;
     if (Math.hypot(p.x - move.targetX, p.y - move.targetY) < 0.5)
       throw new Error("Counter is a no-op");
-    current = applyAction(current, move);
+    const simulation = simulateAction(current, move);
+    if (simulation.movementBlocked || simulation.tacklerIds.length)
+      throw new Error("Counter movement crosses an opponent");
+    current = simulation.frames.at(-1)!.board;
     return move;
   });
   if (player(seq.opponent.outletPlayerId).team !== "tottenham")
@@ -387,6 +394,8 @@ const BALL_SPEED = 32;
 // Never assume a defender keeps following the ball when they could cut it out.
 const INTERCEPT_SPEED = 6;
 const FIRST_TOUCH_MS = 200;
+export const MOVEMENT_CLEARANCE = 4;
+const CARRY_SPEED = 5;
 type SimulationFrame = {
   time: number;
   board: Board;
@@ -401,7 +410,7 @@ function toward(from: Position, target: Position, maximum: number): Position {
   const length = distance(from, target);
   return mix(from, target, length ? Math.min(1, maximum / length) : 0);
 }
-function actionBall(base: Board, action: Action, time: number): Position {
+function actionBall(base: Board, action: Action, time: number, path?: Position[] | null): Position {
   const owner = base.players.find((p) => p.id === base.possession)!;
   const t = Math.max(0, Math.min(1, time / action.durationMs));
   if (action.type === "pass")
@@ -411,12 +420,99 @@ function actionBall(base: Board, action: Action, time: number): Position {
       t,
     );
   if (action.type === "move" && action.playerId === owner.id)
-    return mix(
-      owner,
-      { x: action.targetX, y: action.targetY },
-      t * t * (3 - 2 * t),
-    );
+    return path ? sampleMovementPath(path, t * t * (3 - 2 * t)) : owner;
   return owner;
+}
+type MovementObstacle = Position & { radius: number };
+/** Shortest visible route around conservative swept defensive areas. */
+export function planMovement(base: Board, action: MoveAction): Position[] | null {
+  const mover = base.players.find((p) => p.id === action.playerId)!;
+  const target = { x: action.targetX, y: action.targetY };
+  if (distance(mover, target) < 0.01) return [mover, target];
+  const owner = base.players.find((p) => p.id === base.possession)!;
+  // Off-ball runs do not change the ball trajectory. Forecast the block's shift
+  // first, then avoid the whole area each opponent occupies during the run.
+  const forecast = mover.team === owner.team && mover.id !== owner.id
+    ? simulateAction(base, {
+        type: "highlight", playerIds: [owner.id],
+        durationMs: action.durationMs, caption: "Forecast defensive movement",
+      }).frames
+    : [];
+  const obstacles: MovementObstacle[] = base.players.filter((p) => p.team !== mover.team).map((p) => {
+    const end = forecast.at(-1)?.board.players.find((q) => q.id === p.id) ?? p;
+    const center = mix(p, end, 0.5);
+    const radius = Math.max(distance(center, p), ...forecast.map((f) =>
+      distance(center, f.board.players.find((q) => q.id === p.id)!),
+    ));
+    return { ...center, radius: MOVEMENT_CLEARANCE + 0.3 + radius };
+  });
+  const clear = (a: Position, b: Position) => obstacles.every((p) => {
+    const initial = distance(p, a);
+    // A board edit may start with overlapping pieces. Allow an off-ball runner
+    // to leave an overlap monotonically; never let it cut through the obstacle.
+    if (a === mover && initial < p.radius)
+      return distance(p, b) > initial && laneDistance(p, a, b) >= initial - 1e-7;
+    return laneDistance(p, a, b) >= p.radius - 1e-7;
+  });
+  if (obstacles.some((p) => distance(p, target) < p.radius)) return null;
+  if (clear(mover, target)) return [mover, target];
+  const nodes: Position[] = [mover, target];
+  for (const p of obstacles) {
+    // Circumscribed polygon: its chords stay outside the clearance circle.
+    const radius = (p.radius + 0.1) / Math.cos(Math.PI / 12);
+    for (let i = 0; i < 12; i++) {
+      const angle = i * Math.PI / 6;
+      const point = { x: p.x + radius * Math.cos(angle), y: p.y + radius * Math.sin(angle) / 0.62 };
+      if (point.x >= 4 && point.x <= 96 && point.y >= 4 && point.y <= 96 &&
+          obstacles.every((o) => distance(o, point) >= o.radius)) nodes.push(point);
+    }
+  }
+  const costs = nodes.map(() => Infinity), previous = nodes.map(() => -1);
+  const visited = new Set<number>();
+  costs[0] = 0;
+  for (let iteration = 0; iteration < nodes.length; iteration++) {
+    let nearest = -1;
+    for (let i = 0; i < nodes.length; i++)
+      if (!visited.has(i) && (nearest < 0 || costs[i] < costs[nearest])) nearest = i;
+    if (nearest < 0 || !Number.isFinite(costs[nearest])) return null;
+    if (nearest === 1) {
+      // Reject long tours of the pitch masquerading as a short repositioning.
+      if (costs[1] > distance(mover, target) * 1.8 + 4) return null;
+      const route: Position[] = [];
+      for (let i = 1; i >= 0; i = previous[i]) route.unshift(nodes[i]);
+      return route;
+    }
+    visited.add(nearest);
+    for (let i = 0; i < nodes.length; i++) {
+      const cost = costs[nearest] + distance(nodes[nearest], nodes[i]);
+      if (!visited.has(i) && cost < costs[i] && clear(nodes[nearest], nodes[i])) {
+        costs[i] = cost;
+        previous[i] = nearest;
+      }
+    }
+  }
+  return null;
+}
+export function sampleMovementPath(path: Position[], progress: number): Position {
+  const lengths = path.slice(1).map((p, i) => distance(path[i], p));
+  let remaining = Math.max(0, Math.min(1, progress)) * lengths.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < lengths.length; i++) {
+    if (remaining <= lengths[i]) return mix(path[i], path[i + 1], lengths[i] ? remaining / lengths[i] : 0);
+    remaining -= lengths[i];
+  }
+  return path.at(-1)!;
+}
+function movementLength(path: Position[]) {
+  return path.slice(1).reduce((length, p, i) => length + distance(path[i], p), 0);
+}
+/** A model cannot evade tackles by teleporting the ball carrier to its target. */
+export function prepareMove(board: Board, move: MoveAction): MoveAction {
+  if (move.playerId !== board.possession) return move;
+  const path = planMovement(board, move);
+  if (!path) return move;
+  // Smoothstep peaks at 1.5 times mean speed; account for the entire detour.
+  const required = Math.ceil((1.5 * movementLength(path) / CARRY_SPEED) * 20) * 50;
+  return { ...move, durationMs: Math.min(6000, Math.max(move.durationMs, required)) };
 }
 export function passDuration(
   board: Board,
@@ -486,8 +582,14 @@ export function reachableInterceptors(
 export function simulateAction(
   base: Board,
   action: Action,
-): { frames: SimulationFrame[]; interceptorIds: string[] } {
+): { frames: SimulationFrame[]; interceptorIds: string[]; movementBlocked: boolean; tacklerIds: string[]; movementPath: Position[] | null } {
   const owner = base.players.find((p) => p.id === base.possession)!;
+  const movementPath = action.type === "move" ? planMovement(base, action) : null;
+  let movementBlocked = action.type === "move" && !movementPath;
+  if (action.type === "move" && action.playerId === owner.id && movementPath &&
+      1.5 * movementLength(movementPath) / (action.durationMs / 1000) > CARRY_SPEED + 1e-7)
+    movementBlocked = true;
+  const tacklers = new Set<string>();
   // A separately scripted opposition response is an explicit move, not another automatic press.
   const reactive = !(
     action.type === "move" &&
@@ -507,11 +609,12 @@ export function simulateAction(
   ) {
     const previous = frames.at(-1)!;
     const dt = (time - previous.time) / 1000;
-    const ball = actionBall(base, action, time);
+    const ball = actionBall(base, action, time, movementPath);
     const perceived = actionBall(
       base,
       action,
       Math.max(0, time - REACTION_DELAY_MS),
+      movementPath,
     );
     const near = reactive
       ? previous.board.players
@@ -526,17 +629,13 @@ export function simulateAction(
       : [];
     const pressingIds = near.map((p) => p.id);
     let changed = false;
-    const players = previous.board.players.map((p) => {
+    let players = previous.board.players.map((p) => {
       const start = starts.get(p.id)!;
       if (action.type === "move" && action.playerId === p.id) {
         const t = time / action.durationMs;
         return {
           ...p,
-          ...mix(
-            start,
-            { x: action.targetX, y: action.targetY },
-            t * t * (3 - 2 * t),
-          ),
+          ...(movementPath ? sampleMovementPath(movementPath, t * t * (3 - 2 * t)) : start),
         };
       }
       if (!reactive || p.team === owner.team || p.role === "GK") return p;
@@ -556,13 +655,27 @@ export function simulateAction(
         rank === 0 ? PRESS_SPEED : rank === 1 ? SUPPORT_SPEED : BLOCK_SPEED;
       const amount =
         rank >= 0
-          ? Math.min(speed * dt, Math.max(0, distance(p, target) - 2.8))
+          ? Math.min(speed * dt, Math.max(0, distance(p, target) - MOVEMENT_CLEARANCE - 0.3))
           : speed * dt;
       // Cap the action's displacement so a short explanation preserves the team's broad shape.
       const next = toward(start, toward(p, target, amount), 6);
       const position = { x: clamp(next.x), y: clamp(next.y) };
       changed ||= distance(p, position) > 0.00001;
       return { ...p, ...position };
+    });
+    // Automatic pressers yield at contact rather than walking through a player.
+    // Test relative segments, not only frame endpoints, so paths cannot cross
+    // between rendered samples. Explicit runs get validated below as well.
+    const proposed = players;
+    players = proposed.map((p) => {
+      if (p.team === owner.team || !reactive || p.role === "GK") return p;
+      const before = previous.board.players.find((q) => q.id === p.id)!;
+      const collides = proposed.some((q) => {
+        if (q.team === p.team) return false;
+        const qBefore = previous.board.players.find((r) => r.id === q.id)!;
+        return sweptBallDistance(before, p, qBefore, q) < Math.min(MOVEMENT_CLEARANCE, distance(before, qBefore)) - 1e-7;
+      });
+      return collides ? before : p;
     });
     const defendingTeam = owner.team === "tottenham" ? "arsenal" : "tottenham";
     const board: Board = {
@@ -593,17 +706,37 @@ export function simulateAction(
         )
           interceptors.add(p.id);
       }
+    if (action.type === "move") {
+      const before = previous.board.players.find((p) => p.id === action.playerId)!;
+      const after = players.find((p) => p.id === action.playerId)!;
+      for (const opponent of players.filter((p) => p.team !== after.team)) {
+        const opponentBefore = previous.board.players.find((p) => p.id === opponent.id)!;
+        const initialGap = distance(before, opponentBefore);
+        if (sweptBallDistance(before, after, opponentBefore, opponent) < Math.min(MOVEMENT_CLEARANCE, initialGap) - 1e-7)
+          movementBlocked = true;
+        if (action.playerId === owner.id) {
+          const start = starts.get(opponent.id)!;
+          // The defender can attack any part of the dribble, irrespective of
+          // their displayed pressing assignment. Using the end-of-tick reach
+          // for the whole segment is conservative by at most 0.3 pitch units.
+          const reach = PASS_LANE_CLEARANCE + INTERCEPT_SPEED * Math.max(0, (time - REACTION_DELAY_MS) / 1000);
+          if (laneDistance(start, previous.ball, ball) <= reach ||
+              sweptBallDistance(previous.ball, ball, opponentBefore, opponent) <= PASS_LANE_CLEARANCE)
+            tacklers.add(opponent.id);
+        }
+      }
+    }
     frames.push({ time, board, ball, pressingIds });
     if (time === action.durationMs) break;
   }
-  return { frames, interceptorIds: [...interceptors] };
+  return { frames, interceptorIds: [...interceptors], movementBlocked, tacklerIds: [...tacklers], movementPath };
 }
 export function compileSequence(base: Board, actions: Action[]) {
   let board = base,
     start = 0;
   const steps = actions.map((action) => {
     const simulation = simulateAction(board, action);
-    const step = { action, start, frames: simulation.frames };
+    const step = { action, start, frames: simulation.frames, movementPath: simulation.movementPath };
     board = simulation.frames.at(-1)!.board;
     start += action.durationMs;
     return step;

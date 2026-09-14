@@ -5,6 +5,8 @@ import {
   passDuration,
   passLane,
   distance,
+  prepareMove,
+  simulateAction,
   validateSequence,
   type Board,
   type Action,
@@ -68,6 +70,46 @@ function distinctMove(board: Board, action: MoveAction): MoveAction {
         "Stagger the support position to open a different passing angle.",
     };
   return action;
+}
+function safeMovement(board: Board, action: MoveAction): MoveAction | null {
+  const move = prepareMove(board, action);
+  const result = simulateAction(board, move);
+  return result.movementBlocked || result.tacklerIds.length ? null : move;
+}
+function adjustMovement(board: Board, action: MoveAction): MoveAction | null {
+  const original = safeMovement(board, action);
+  if (original) return original;
+  // Do not invent a different dribble to conceal a tackle. Release or omit it.
+  if (action.playerId === board.possession) return null;
+  const player = board.players.find((p) => p.id === action.playerId)!;
+  const candidates = [
+    ...[4, 8].flatMap((r) => Array.from({ length: 8 }, (_, i) => ({
+      x: clamp(action.targetX + r * Math.cos(i * Math.PI / 4)),
+      y: clamp(action.targetY + r * Math.sin(i * Math.PI / 4) / 0.62),
+    }))),
+    ...Array.from({ length: 8 }, (_, i) => ({
+      x: clamp(player.x + 3 * Math.cos(i * Math.PI / 4)),
+      y: clamp(player.y + 3 * Math.sin(i * Math.PI / 4) / 0.62),
+    })),
+  ];
+  for (const target of candidates) {
+    if (distance(player, target) < 0.5) continue;
+    const move = safeMovement(board, {
+      ...action, targetX: target.x, targetY: target.y,
+      caption: `The ${player.role} adjusts the run into open space, avoiding the defender.`,
+    });
+    if (move) return move;
+  }
+  return null;
+}
+function previewActions(board: Board, actions: Action[]) {
+  let safe = true;
+  for (const action of actions) {
+    const result = simulateAction(board, action.type === "move" ? prepareMove(board, action) : action);
+    safe &&= !result.movementBlocked && result.tacklerIds.length === 0;
+    board = result.frames.at(-1)!.board;
+  }
+  return { board, safe };
 }
 export function curatedAnalysis(input: LabRequest): AnalysisResult {
   const intent = detectIntent(input.question, input.scenario);
@@ -270,14 +312,17 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
       },
     };
   } else {
+    // If RCM has possession, create the second pivot off the ball instead of
+    // asking the carrier to dribble backwards through the pressing midfielder.
+    const pivotId = b.possession === "rcm" ? "lcm" : "rcm";
     actions = [
       distinctMove(
         b,
         move(
-          "rcm",
+          pivotId,
           dm.x + 2,
-          dm.y + (dm.y > 65 ? -18 : 18),
-          "The right midfielder drops alongside the DM for a double pivot.",
+          dm.y + (get(pivotId).y < dm.y || dm.y > 65 ? -18 : 18),
+          `The ${get(pivotId).role} drops off the ball alongside the DM for a double pivot.`,
         ),
       ),
     ];
@@ -331,7 +376,8 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
         p.id !== board.possession &&
         !passLane(board, board.possession, p.id).blocked,
     );
-  if (ownsBall && !hasOutlet(applyActions(b, actions))) {
+  const preview = previewActions(b, actions);
+  if (ownsBall && (!preview.safe || !hasOutlet(preview.board))) {
     const moving = new Set(
       actions
         .filter((a): a is MoveAction => a.type === "move")
@@ -355,7 +401,8 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
         durationMs: passDuration(b, b.possession, receiver.id),
         caption: `Release to ${receiver.role} before pressure arrives, then make the off-ball run.`,
       };
-      if (!hasOutlet(applyActions(b, [release, ...actions]))) continue;
+      const released = previewActions(b, [release, ...actions]);
+      if (!released.safe || !hasOutlet(released.board)) continue;
       actions = actions.map((a) =>
         a.type === "highlight" ? { ...a, playerIds: [receiver.id] } : a,
       );
@@ -364,6 +411,18 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
       break;
     }
   }
+  let adjustedMovement = false;
+  let movingBoard = b;
+  actions = actions.flatMap((action) => {
+    const safe = action.type === "move" ? adjustMovement(movingBoard, action) : action;
+    if (!safe) {
+      adjustedMovement = true;
+      return [];
+    }
+    adjustedMovement ||= JSON.stringify(safe) !== JSON.stringify(action);
+    movingBoard = applyActions(movingBoard, [safe]);
+    return [safe];
+  });
   let rerouted = false,
     omitted = false;
   if (ownsBall) {
@@ -395,13 +454,37 @@ export function curatedAnalysis(input: LabRequest): AnalysisResult {
     }
   }
   sequence.actions = actions;
-  sequence.opponent.movements = sequence.opponent.movements.map((a) =>
-    distinctMove(applyActions(b, actions), a),
-  );
+  let counterBoard = applyActions(b, actions);
+  sequence.opponent.movements = sequence.opponent.movements.flatMap((a) => {
+    const safe = adjustMovement(counterBoard, distinctMove(counterBoard, a));
+    if (!safe) return [];
+    counterBoard = applyActions(counterBoard, [safe]);
+    return [safe];
+  });
+  if (!sequence.opponent.movements.length) {
+    const owner = counterBoard.players.find((p) => p.id === counterBoard.possession)!;
+    const supporters = counterBoard.players.filter((p) => p.team === "arsenal" && p.id !== owner.id && p.role !== "GK")
+      .sort((a, c) => distance(a, owner) - distance(c, owner));
+    for (const player of supporters) {
+      const safe = adjustMovement(counterBoard, move(player.id, player.x - 3, player.y,
+        `Arsenal's ${player.role} adjusts its supporting position.`));
+      if (!safe) continue;
+      sequence.opponent.movements = [safe];
+      sequence.opponent.explanation = `The original response has no safe movement route. Arsenal's ${player.role} could instead adjust its supporting position.`;
+      sequence.opponent.space = { x: player.x, y: player.y, label: `Space beside the repositioning ${player.role}` };
+      break;
+    }
+  }
+  if (!actions.some((a) => a.type !== "highlight") || !sequence.opponent.movements.length)
+    return { analysis: null, source: "fallback", notice: "No safe sequence was found from this shape. The ball carrier cannot move through the press; reposition an off-ball teammate or choose a different outlet." };
   return {
     analysis: validateSequence(sequence, b),
     source: "fallback",
-    notice: ownsBall
+    notice: !ownsBall
+      ? "Arsenal has the ball. This guide shows safe off-ball shape changes only; give Tottenham possession to explore the passing sequence."
+      : adjustedMovement
+        ? "A proposed run has no open route or exposes the ball carrier to a tackle. Only safe movements and passes are shown; adjust support positions to create another route."
+        : ownsBall
       ? omitted
         ? "Some intended connections have no open route within this short sequence. Only open passes are shown; adjust the support positions to connect further."
         : rerouted

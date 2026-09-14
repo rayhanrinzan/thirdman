@@ -41,7 +41,6 @@ import {
   type Board,
   type Formation,
   type LabRequest,
-  type MoveAction,
   type Sequence,
   type Team,
 } from "@/lib/lab";
@@ -120,9 +119,10 @@ export default function Sandbox() {
   const displayed = session ? sample.board : history.board;
   const owner = displayed.players.find((p) => p.id === displayed.possession)!;
   const selection = displayed.players.find((p) => p.id === selected);
-  const ghosts: MoveAction[] =
+  const ghosts =
     session && phase !== "original" && timeline.time === 0
-      ? actions.filter((a): a is MoveAction => a.type === "move")
+      ? compiled.steps.flatMap((step) => step.action.type === "move" && step.movementPath
+          ? [{ ...step.action, path: step.movementPath }] : [])
       : [];
   const completed =
     !!session && phase !== "original" && timeline.time >= duration;

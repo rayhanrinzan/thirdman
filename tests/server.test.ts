@@ -197,3 +197,23 @@ test("live output falls back when a defender can anticipate the pass instead of 
     restore();
   }
 });
+
+test("live output cannot reposition the ball carrier through the press", async () => {
+  process.env.OPENAI_API_KEY = "test-placeholder-not-a-real-key";
+  const board = createBoard("lead");
+  const unsafe = {
+    ...fixture,
+    actions: [{ type: "move", playerId: "rcm", targetX: 42, targetY: 62,
+      durationMs: 400, caption: "Drop the ball carrier through the press." }],
+  };
+  globalThis.fetch = async () => mockResponse(unsafe);
+  try {
+    const result = await analyzeBoard({ scenario: "lead", question: "protect our lead", board });
+    assert.equal(result.source, "fallback");
+    assert.ok(result.analysis);
+    assert.deepEqual(validateSequence(result.analysis, board), result.analysis);
+    assert.ok(result.analysis.actions.every((a) => a.type !== "move" || a.playerId !== "rcm"));
+  } finally {
+    restore();
+  }
+});

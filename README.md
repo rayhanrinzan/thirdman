@@ -81,6 +81,12 @@ Route search advances the defensive state after each candidate pass. Its bounded
 
 Compiled previews make pause, scrubbing and replay deterministic. Applying the sequence saves both teams' resulting positions in one undo step. The separate Arsenal-response stage adds the explicitly proposed tactical movement to the already-reacted defense. Reduced motion steps through these same states.
 
+### Movement and ball-carrying safety
+
+Moving the player in possession is treated as a dribble. Every segment of the run is checked against defenders' actual movement and their ability to reach the carrier after reacting. The carry is rejected if a tackle is available anywhere along the route, including between frames. Carrying duration is normalized to keep peak speed at five pitch-length units per second, including the longer distance of a detour; a model cannot use a 400 ms animation to escape the check. A carry that cannot fit within the six-second action limit is rejected. The ball follows the same path as its carrier.
+
+Off-ball runners use a bounded shortest-path search around opponents, with four units of body clearance. When the defending block moves, the route avoids its forecast occupied areas. Actual opposing paths are checked again throughout playback simulation, and automatic pressers yield at contact instead of walking through players. Initial route arrows show the planned detour. If a target is occupied or a route cannot be made safe, the curated guide adjusts an off-ball target, releases possession first when a safe outlet exists, or omits the movement with an explanation. It never treats an off-ball crossing as a turnover. The default protect-a-lead guide drops LCM alongside DM while RCM retains the ball, instead of dribbling RCM backwards through pressure.
+
 ### AI and deterministic recovery
 
 The browser sends the actual question, scenario, all 22 players, roles, formations, edited-shape flags, and ball owner. The route validates the roster and a 24 KB body limit. The server sends a strict Structured Outputs schema using `client.responses.parse()` with `store: false`, then validates the result semantically. The model never generates code to run.
